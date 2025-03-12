@@ -25,56 +25,56 @@ class Metaheuristic:
                  initial_scheme: str = 'random', verbose: bool = False):
         """
         Create a population-based metaheuristic by employing different simple search operators.
-
-        :param dict problem:
-            This is a dictionary containing the 'function' that maps a 1-by-D array of real values to a real value,
-            'is_constrained' flag that indicates the solution is inside the search space, and the 'boundaries' (a tuple
-            with two lists of size D). These two lists correspond to the lower and upper limits of domain, such as:
-            ``boundaries = (lower_boundaries, upper_boundaries)``
-
-            **Note:** Dimensions (D) of search domain are read from these boundaries. The problem can be obtained from
-            the ``benchmark_func`` module.
-        :param list search_operators:
-            A list of available search operators. These operators must correspond to those available in the
-            ``operators`` module. This parameter is mandatory for mataheuristic implementations, for using parts of this
-            class, these can be provided as a list of ``operators``.
-        :param int num_agents: Optional.
-            Number of agents or population size. The default is 30.
-        :param int num_iterations: Optional.
-            Number of iterations or generations that the metaheuristic is going to perform. The default is 100.
-
-        :return: None.
         """
+        print("--- LOG: Iniciando Metaheuristic ---")
+        print(f"--- LOG: Parâmetros recebidos ---")
+        print(f"Num_agents: {num_agents}, Num_iterations: {num_iterations}, Initial_scheme: {initial_scheme}")
+        print(f"Verbose: {verbose}")
+        
         # Read the problem function
         self.finalisation_conditions = None
         self._problem_function = problem['function']
-
+        
+        print("--- LOG: Criando população ---")
         # Create population
         self.pop = Population(problem['boundaries'], num_agents, problem['is_constrained'])
 
         # Check and read the search_operators
         if search_operators:
+            print(f"--- LOG: Verificando search_operators (total: {len(search_operators)}) ---")
             if not isinstance(search_operators, list):
                 search_operators = [search_operators]
+            print("--- LOG: Estrutura de search_operators ---")
+            for i, op in enumerate(search_operators):
+                print(f"Operador {i}: {op}")
+            
             self.perturbators, self.selectors = Operators.process_operators(search_operators)
+            print("--- LOG: process_operators executado com sucesso ---")
 
         # Define the maximum number of iterations
         self.num_iterations = num_iterations
+        print("--- LOG: Número máximo de iterações definido ---")
 
         # Read the number of dimensions
         self.num_dimensions = self.pop.num_dimensions
+        print(f"--- LOG: Número de dimensões: {self.num_dimensions} ---")
 
         # Read the number of agents
         self.num_agents = num_agents
+        print(f"--- LOG: Número de agentes: {self.num_agents} ---")
 
         # Initialise historical variables
         self.historical = dict()
+        print("--- LOG: Variáveis históricas inicializadas ---")
 
         # Set additional variables
         self.verbose = verbose
+        print(f"--- LOG: Verbose setado como: {self.verbose} ---")
 
         # Set the initial scheme
         self.initial_scheme = initial_scheme
+        print(f"--- LOG: Initial_scheme setado como: {self.initial_scheme} ---")
+        print("--- LOG: Metaheuristic inicializada com sucesso ---")
 
     def apply_initialiser(self):
         # Set initial iteration
