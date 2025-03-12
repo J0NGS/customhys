@@ -471,6 +471,7 @@ class Hyperheuristic:
 
             print(f"--- LOG: Passo {step} - Gerando vizinho ---")
             action = self._choose_action(len(current_solution), action)
+            # Posso aplicar o BRKGA aqui, substituindo a função obtain_candidate_solution, ou até mesmo implementar dentro da função
             candidate_solution = self._obtain_candidate_solution(sol=current_solution, action=action)
             print(f"--- LOG: Vizinho gerado: {candidate_solution} ---")
 
@@ -591,7 +592,7 @@ class Hyperheuristic:
                 # Prepare before evaluate the last search operator and apply it
                 candidate_search_operator = self.get_operators([candidate_enc_so[-1]])
                 perturbators, selectors = op.process_operators(candidate_search_operator)
-
+                
                 mh.apply_search_operator(perturbators[0], selectors[0])
 
                 # Extract the population and fitness values, and their best values
