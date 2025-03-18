@@ -26,8 +26,8 @@ class Metaheuristic:
         """
         Create a population-based metaheuristic by employing different simple search operators.
         """
-        print("--- LOG: Iniciando Metaheuristic ---")
-        print(f"--- LOG: Parâmetros recebidos ---")
+        #print("--- LOG: Iniciando Metaheuristic ---")
+        #print(f"--- LOG: Parâmetros recebidos ---")
         print(f"Num_agents: {num_agents}, Num_iterations: {num_iterations}, Initial_scheme: {initial_scheme}")
         print(f"Verbose: {verbose}")
         
@@ -35,46 +35,46 @@ class Metaheuristic:
         self.finalisation_conditions = None
         self._problem_function = problem['function']
         
-        print("--- LOG: Criando população ---")
+        #print("--- LOG: Criando população ---")
         # Create population
         self.pop = Population(problem['boundaries'], num_agents, problem['is_constrained'])
 
         # Check and read the search_operators
         if search_operators:
-            print(f"--- LOG: Verificando search_operators (total: {len(search_operators)}) ---")
+            #print(f"--- LOG: Verificando search_operators (total: {len(search_operators)}) ---")
             if not isinstance(search_operators, list):
                 search_operators = [search_operators]
-            print("--- LOG: Estrutura de search_operators ---")
+            #print("--- LOG: Estrutura de search_operators ---")
             for i, op in enumerate(search_operators):
                 print(f"Operador {i}: {op}")
             
             self.perturbators, self.selectors = Operators.process_operators(search_operators)
-            print("--- LOG: process_operators executado com sucesso ---")
+            #print("--- LOG: process_operators executado com sucesso ---")
 
         # Define the maximum number of iterations
         self.num_iterations = num_iterations
-        print("--- LOG: Número máximo de iterações definido ---")
+        #print("--- LOG: Número máximo de iterações definido ---")
 
         # Read the number of dimensions
         self.num_dimensions = self.pop.num_dimensions
-        print(f"--- LOG: Número de dimensões: {self.num_dimensions} ---")
+        #print(f"--- LOG: Número de dimensões: {self.num_dimensions} ---")
 
         # Read the number of agents
         self.num_agents = num_agents
-        print(f"--- LOG: Número de agentes: {self.num_agents} ---")
+        #print(f"--- LOG: Número de agentes: {self.num_agents} ---")
 
         # Initialise historical variables
         self.historical = dict()
-        print("--- LOG: Variáveis históricas inicializadas ---")
+        #print("--- LOG: Variáveis históricas inicializadas ---")
 
         # Set additional variables
         self.verbose = verbose
-        print(f"--- LOG: Verbose setado como: {self.verbose} ---")
+        #print(f"--- LOG: Verbose setado como: {self.verbose} ---")
 
         # Set the initial scheme
         self.initial_scheme = initial_scheme
-        print(f"--- LOG: Initial_scheme setado como: {self.initial_scheme} ---")
-        print("--- LOG: Metaheuristic inicializada com sucesso ---")
+        #print(f"--- LOG: Initial_scheme setado como: {self.initial_scheme} ---")
+        #print("--- LOG: Metaheuristic inicializada com sucesso ---")
 
     def apply_initialiser(self):
         # Set initial iteration

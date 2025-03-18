@@ -210,15 +210,15 @@ class Hyperheuristic:
         return new_weights
 
     def _obtain_candidate_solution(self, sol=None, action=None, operators_weights=None, top=None):
-        print("--- LOG: Entrando em _obtain_candidate_solution ---")
-        print(f"Parâmetro recebido sol: {sol}")
-        print(f"Parâmetro action: {action}")
-        print(f"Parâmetro operators_weights: {operators_weights}")
-        print(f"Parâmetro top: {top}")
+        #print("--- LOG: Entrando em _obtain_candidate_solution ---")
+        #print(f"Parâmetro recebido sol: {sol}")
+        #print(f"Parâmetro action: {action}")
+        #print(f"Parâmetro operators_weights: {operators_weights}")
+        #print(f"Parâmetro top: {top}")
         
         # Create a new MH with min_cardinality from scratch by using a weights array (if so)
         if sol is None:
-            print("--- LOG: Criando solução inicial ---")
+            #print("--- LOG: Criando solução inicial ---")
             if action == 'max_frequency':
                 encoded_neighbour = [weights_per_step.argmax() for weights_per_step in operators_weights]
             else:
@@ -230,14 +230,14 @@ class Hyperheuristic:
                     replace=self.parameters['repeat_operators'], p=operators_weights)
 
         elif isinstance(sol, int):
-            print("--- LOG: sol é um inteiro, gerando solução com cardinalidade específica ---")
+            #print("--- LOG: sol é um inteiro, gerando solução com cardinalidade específica ---")
             operators_weights = self.weights if operators_weights is None else operators_weights
             encoded_neighbour = np.random.choice(
                 self.current_space if (operators_weights is None) else self.num_operators, sol,
                 replace=self.parameters['repeat_operators'], p=operators_weights)
 
         elif isinstance(sol, (np.ndarray, list)):
-            print("--- LOG: sol é uma lista ou ndarray, aplicando perturbação ---")
+            #print("--- LOG: sol é uma lista ou ndarray, aplicando perturbação ---")
             if (operators_weights is not None) and (top is not None):
                 operators_weights = self.__adjust_frequencies(operators_weights, to_only=top)
 
@@ -246,7 +246,7 @@ class Hyperheuristic:
             
             if not action:
                 action = self._choose_action(current_cardinality)
-            print(f"--- LOG: Ação escolhida: {action} ---")
+            #print(f"--- LOG: Ação escolhida: {action} ---")
 
             if (action == 'Add') and (current_cardinality < self.max_cardinality):
                 selected_operator = np.random.choice(np.setdiff1d(self.current_space, sol)
@@ -323,7 +323,7 @@ class Hyperheuristic:
         else:
             raise HyperheuristicError('Invalid type of current solution!')
 
-        print(f"--- LOG: encoded_neighbour gerado: {encoded_neighbour} ---")
+        #print(f"--- LOG: encoded_neighbour gerado: {encoded_neighbour} ---")
         return encoded_neighbour
 
 
@@ -426,12 +426,12 @@ class Hyperheuristic:
             - encoded_solution: The sequence of indices that correspond to the search operators.
             - historicals: A dictionary of information from each step.
         """
-        print("--- LOG: Iniciando _solve_static ---")
+        #print("--- LOG: Iniciando _solve_static ---")
 
         # %% INITIALISER PART
-        print("--- LOG: Gerando solução inicial ---")
+        #print("--- LOG: Gerando solução inicial ---")
         current_solution = self._obtain_candidate_solution()
-        print(f"--- LOG: Solução inicial gerada: {current_solution} ---")
+        #print(f"--- LOG: Solução inicial gerada: {current_solution} ---")
 
 
         if isinstance(current_solution, np.ndarray): # Correção de tipo, ndarray para list
@@ -439,9 +439,9 @@ class Hyperheuristic:
 
 
         # Evaluate this solution
-        print("--- LOG: Avaliando solução inicial ---")
+        #print("--- LOG: Avaliando solução inicial ---")
         current_performance, current_details = self.evaluate_candidate_solution(current_solution)
-        print(f"--- LOG: Performance inicial: {current_performance} ---")
+        #print(f"--- LOG: Performance inicial: {current_performance} ---")
 
         # Initialise some additional variables
         initial_energy = np.abs(current_performance) + 1
@@ -469,29 +469,29 @@ class Hyperheuristic:
             step += 1
             temperature = self._obtain_temperature(step, self.parameters['temperature_scheme'])
 
-            print(f"--- LOG: Passo {step} - Gerando vizinho ---")
+            #print(f"--- LOG: Passo {step} - Gerando vizinho ---")
             action = self._choose_action(len(current_solution), action)
             # Posso aplicar o BRKGA aqui, substituindo a função obtain_candidate_solution, ou até mesmo implementar dentro da função
             candidate_solution = self._obtain_candidate_solution(sol=current_solution, action=action)
-            print(f"--- LOG: Vizinho gerado: {candidate_solution} ---")
+            #print(f"--- LOG: Vizinho gerado: {candidate_solution} ---")
 
-            print("--- LOG: Avaliando candidato ---")
+           # print("--- LOG: Avaliando candidato ---")
             if isinstance(candidate_solution, np.ndarray):
                 candidate_solution = candidate_solution.tolist()  # solução do problema, convertendo para list
             candidate_performance, candidate_details = self.evaluate_candidate_solution(candidate_solution)
-            print(f"--- LOG: Performance do candidato: {candidate_performance} ---")
+            #print(f"--- LOG: Performance do candidato: {candidate_performance} ---")
 
             if self.parameters['verbose']:
                 print(f"{self.file_label} :: Step: {step:4d}, Temp: {temperature:.2e}, Perf: {candidate_performance:.2e}")
 
             if self._check_acceptance(candidate_performance - current_performance, self.parameters['acceptance_scheme'],
                                     temperature, initial_energy):
-                print("--- LOG: Aceitando nova solução ---")
+                #print("--- LOG: Aceitando nova solução ---")
                 current_solution = np.copy(candidate_solution)
                 current_performance = candidate_performance
 
             if candidate_performance <= best_performance:
-                print("--- LOG: Atualizando melhor solução ---")
+                #print("--- LOG: Atualizando melhor solução ---")
                 best_solution = np.copy(candidate_solution)
                 best_performance = candidate_performance
                 stag_counter = 0
@@ -508,7 +508,7 @@ class Hyperheuristic:
             historical_current.append(current_performance)
             historical_best.append(best_performance)
 
-        print(f"\n--- LOG: Melhor solução encontrada --> Perf: {best_performance}, Sol: {best_solution} ---")
+        #print(f"\n--- LOG: Melhor solução encontrada --> Perf: {best_performance}, Sol: {best_solution} ---")
         return best_solution, best_performance, historical_current, historical_best
 
 
@@ -857,20 +857,20 @@ class Hyperheuristic:
             module for further information.
         :return float, dict: Performance and raw data.
         """
-        print("--- LOG: Iniciando evaluate_candidate_solution ---")
-        print(f"--- LOG: encoded_sequence recebido ---\nTipo: {type(encoded_sequence)} | Conteúdo: {encoded_sequence}")
+        #print("--- LOG: Iniciando evaluate_candidate_solution ---")
+        #print(f"--- LOG: encoded_sequence recebido ---\nTipo: {type(encoded_sequence)} | Conteúdo: {encoded_sequence}")
         
         # Decode the sequence corresponding to the hyper/meta-heuristic
         search_operators = encoded_sequence
         if isinstance(encoded_sequence[0], int) or isinstance(encoded_sequence[0], np.int64):
             search_operators = self.get_operators(encoded_sequence)
-            print(f"--- LOG: encoded_sequence convertido para operadores ---\n{search_operators}")
+            #print(f"--- LOG: encoded_sequence convertido para operadores ---\n{search_operators}")
         
         if not isinstance(search_operators, list) or len(search_operators) == 0:
-            print("*** ERRO: search_operators está vazio ou não é uma lista válida! ***")
+            #print("*** ERRO: search_operators está vazio ou não é uma lista válida! ***")
             return None, None
         
-        print("--- LOG: search_operators validado ---")
+        #print("--- LOG: search_operators validado ---")
         print(f"{search_operators}")
         
         # Initialise the historical registers
@@ -878,16 +878,16 @@ class Hyperheuristic:
         fitness_data = list()
         position_data = list()
         
-        print("--- LOG: Iniciando execuções da Metaheuristic ---")
+        #print("--- LOG: Iniciando execuções da Metaheuristic ---")
         # Run the metaheuristic several times
         for i in range(self.parameters['num_replicas']):
-            print(f"--- LOG: Rodada {i+1}/{self.parameters['num_replicas']} ---")
+            #print(f"--- LOG: Rodada {i+1}/{self.parameters['num_replicas']} ---")
             try:
                 # Call the metaheuristic
                 mh = Metaheuristic(self.problem, search_operators,
                                 self.parameters['num_agents'],
                                 self.num_iterations)
-                print("--- LOG: Metaheuristic criada com sucesso ---")
+                #print("--- LOG: Metaheuristic criada com sucesso ---")
 
                 # Run this metaheuristic
                 mh.run()
@@ -901,14 +901,14 @@ class Hyperheuristic:
                 fitness_data.append(_temporal_fitness)
                 position_data.append(_temporal_position)
             except Exception as e:
-                print(f"*** ERRO durante a execução da Metaheuristic: {e} ***")
+                #print(f"*** ERRO durante a execução da Metaheuristic: {e} ***")
                 return None, None
         
         # Determine a performance metric once finish the repetitions
         fitness_stats = self.get_statistics(fitness_data)
         
-        print("--- LOG: Avaliação finalizada ---")
-        print(f"--- LOG: fitness_stats ---\n{fitness_stats}")
+       # print("--- LOG: Avaliação finalizada ---")
+        #print(f"--- LOG: fitness_stats ---\n{fitness_stats}")
         
         # Return the performance value and the corresponding details
         return self.get_performance(fitness_stats), dict(

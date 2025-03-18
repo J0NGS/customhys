@@ -1051,10 +1051,10 @@ def process_operators(simple_heuristics):
         out[0] - executable_operators is a list of ready-to-execute string of search operators, and
         out[1] - selectors is the list of strings of the selectors associated to operators.
     """
-    print("--- LOG: Verificando simple_heuristics ---")
-    print(f"Total de operadores recebidos: {len(simple_heuristics)}")
+    #print("--- LOG: Verificando simple_heuristics ---")
+    #print(f"Total de operadores recebidos: {len(simple_heuristics)}")
     for i, item in enumerate(simple_heuristics):
-        print(f"Operador {i}: {item}")
+        #print(f"Operador {i}: {item}")
         if not isinstance(item, (list, tuple)) or len(item) != 3:
             print("*** ERRO: Item inválido encontrado! ***")
             print(f"Item problemático: {item}")
@@ -1089,7 +1089,7 @@ def process_operators(simple_heuristics):
         # Store the read operator
         executable_operators.append(full_string)
     
-    print("--- LOG: process_operators finalizado com sucesso ---")
+    #print("--- LOG: process_operators finalizado com sucesso ---")
     return executable_operators, selectors
 
 
