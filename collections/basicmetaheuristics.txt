@@ -8,7 +8,6 @@
 ('central_force_dynamic', {'gravity': 0.001, 'alpha': 0.10, 'beta': 1.5, 'dt': 1.0}, 'all')
 ('central_force_dynamic', {'gravity': 0.010, 'alpha': 0.10, 'beta': 1.5, 'dt': 1.0}, 'all')
 ('central_force_dynamic', {'gravity': 0.100, 'alpha': 0.10, 'beta': 1.5, 'dt': 1.0}, 'all')
-[('differential_mutation', {'expression': 'rand-to-best-and-current', 'num_rands': 1, 'factor': 1.0}, 'greedy'), ('differential_crossover', {'crossover_rate': 0.2, 'version': 'binomial'}, 'greedy')]
 [('differential_mutation', {'expression': 'rand-to-best-and-current', 'num_rands': 2, 'factor': 1.0}, 'greedy'), ('differential_crossover', {'crossover_rate': 0.2, 'version': 'binomial'}, 'greedy')]
 [('differential_mutation', {'expression': 'rand-to-best-and-current', 'num_rands': 1, 'factor': 2.0}, 'greedy'), ('differential_crossover', {'crossover_rate': 0.2, 'version': 'binomial'}, 'greedy')]
 [('differential_mutation', {'expression': 'rand-to-best-and-current', 'num_rands': 2, 'factor': 2.0}, 'greedy'), ('differential_crossover', {'crossover_rate': 0.2, 'version': 'binomial'}, 'greedy')]

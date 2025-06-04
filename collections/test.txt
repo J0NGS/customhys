@@ -1,0 +1,7 @@
+('differential_mutation', {'expression': 'rand-to-best', 'num_rands': 1, 'factor': 0.8}, 'greedy')
+('differential_mutation', {'expression': 'current-to-best', 'num_rands': 1, 'factor': 1.0}, 'greedy')
+('genetic_mutation', {'scale': 0.5, 'elite_rate': 0.2, 'mutation_rate': 0.6, 'distribution': 'gaussian'}, 'greedy')
+('genetic_crossover', {'pairing': 'tournament_3_75', 'crossover': 'uniform', 'mating_pool_factor': 0.5}, 'greedy')
+('firefly_dynamic', {'distribution': 'gaussian', 'alpha': 0.2, 'beta': 0.5, 'gamma': 10.0}, 'probabilistic')
+('local_random_walk', {'probability': 0.5, 'scale': 0.3, 'distribution': 'uniform'}, 'greedy')
+('random_flight', {'scale': 0.3, 'distribution': 'levy', 'beta': 1.5}, 'probabilistic')
