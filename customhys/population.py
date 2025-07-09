@@ -7,10 +7,14 @@ Created on Tue Sep 17 14:29:43 2019
 @author: Jorge Mario Cruz-Duarte (jcrvz.github.io), e-mail: jorge.cruz@tec.mx
 """
 from math import isfinite
+from scipy.stats.qmc import Sobol
+from scipy.stats.qmc import Halton
+from scipy.spatial import Voronoi
+
 
 import numpy as np
 import os
-from scipy.stats.qmc import Sobol
+
 
 __all__ = ['Population']
 __selectors__ = ['all', 'greedy', 'metropolis', 'probabilistic']
@@ -303,7 +307,25 @@ class Population:
         if scheme == 'vertex':
             self._positions = self._grid_matrix(self.num_dimensions, self.num_agents)
         elif scheme == 'sobol':
-            self._positions = self._sobol_scipy(self.num_agents, self.num_dimensions)
+            self._positions = self._sobol_scipy(self.num_dimensions, self.num_agents)
+        elif scheme == 'halton':
+            self.positions = self._halton_scipy(self.num_dimensions, self.num_agents)
+        elif scheme == 'beta':
+            self._positions = self._beta(self.num_dimensions, self.num_agents)
+        elif scheme == 'normal':
+            self._positions = self._normal(self.num_dimensions, self.num_agents)
+        elif scheme == 'lognormal':
+            self._positions = self._lognormal(self.num_dimensions, self.num_agents)
+        elif scheme == 'exponential':
+            self._positions = self._exponential(self.num_dimensions, self.num_agents)
+        elif scheme == 'rayleigh':
+            self._positions = self._rayleigh(self.num_dimensions, self.num_agents)
+        elif scheme == 'weibull':
+            self._positions = self._weibull(self.num_dimensions, self.num_agents)
+        elif scheme == 'lhs':
+            self._positions = self._lhs(self.num_dimensions, self.num_agents)
+        elif scheme == 'cvt':
+            self._positions = self._cvt(self.num_dimensions, self.num_agents)
         else:
             self._positions = np.random.uniform(-1, 1, (self.num_agents, self.num_dimensions))
 
@@ -332,6 +354,158 @@ class Population:
         output_matrix = output_matrix[:num_agents, :]
 
         return output_matrix
+
+    @staticmethod
+    def _lhs(num_dimensions, num_agents):
+        """
+        Inicializa população usando Latin Hypercube Sampling (LHS).
+        Garante que cada intervalo em cada dimensão seja coberto uma vez.
+        """
+        seg = np.linspace(0, 1, num_agents + 1)[:-1]  # limites inferiores dos intervalos
+        sample = np.zeros((num_agents, num_dimensions))
+
+        for d in range(num_dimensions):
+            # Embaralha os intervalos
+            np.random.shuffle(seg)
+            # Adiciona uma perturbação uniforme dentro de cada intervalo
+            sample[:, d] = seg + np.random.uniform(0, 1 / num_agents, num_agents)
+
+        # mapeia para [-1,1]
+        return sample * 2 - 1
+
+    @staticmethod
+    def _cvt(num_dimensions, num_agents, iterations=10):
+        """
+        Inicializa população usando Centroidal Voronoi Tessellation (CVT) com Lloyd's Algorithm.
+        Garante que os pontos fiquem bem espalhados.
+        """
+        # inicializa com random uniform
+        points = np.random.rand(num_agents, num_dimensions)
+
+        for _ in range(iterations):
+            vor = Voronoi(points)
+            new_points = []
+            for i in range(num_agents):
+                # pega os vértices da célula de Voronoi correspondente
+                region_idx = vor.point_region[i]
+                vert_indices = vor.regions[region_idx]
+                if -1 in vert_indices or len(vert_indices) == 0:
+                    # célula aberta ou degenerada — pula
+                    new_points.append(points[i])
+                    continue
+                vertices = np.array([vor.vertices[v] for v in vert_indices])
+                centroid = np.mean(vertices, axis=0)
+                centroid = np.clip(centroid, 0, 1)  # fica no [0,1]
+                new_points.append(centroid)
+            points = np.array(new_points)
+
+        # mapeia para [-1,1]
+        return points * 2 - 1
+
+    @staticmethod
+    def _sobol_scipy(num_dimensions, num_agents):
+        """
+        Inicializa população usando sequência de Sobol via SciPy.
+
+        O Sobol gera pontos uniformemente distribuídos no hipercubo [0,1]^dim,
+        cobrindo melhor o espaço do que amostragem puramente aleatória.
+
+        Essa implementação gera no mínimo 2^m pontos, porque o metodo random_base2(m)
+        do Sobol exige que o número de pontos seja uma potência de 2.
+        """
+
+        # calcula m tal que 2^m >= num_agents
+        # ou seja, mínimo m que gera pelo menos num_agents pontos
+        # pois o metodo random_base2 só aceita potências de 2
+        m = int(np.ceil(np.log2(num_agents)))
+
+        # inicializa gerador de Sobol para as dimensões desejadas
+        # com scramble=True para “embaralhar” e melhorar a uniformidade
+        sobol = Sobol(d=num_dimensions, scramble=True)
+
+        # gera 2^m pontos no hipercubo [0,1]^dim
+        sample = sobol.random_base2(m)
+
+        # pega apenas os primeiros num_agents pontos gerados
+        # pois talvez 2^m > num_agents (sobra pontos)
+        seq = sample[:num_agents]
+
+        # mapeia os pontos do intervalo [0,1] para [-1,1]
+        # pois o Population trabalha internamente em [-1,1]
+        return seq * 2 - 1
+
+    @staticmethod
+    def _halton_scipy(num_dimensions, num_agents):
+        """
+        Inicializa população usando sequência de Halton via SciPy.
+
+        O Halton gera pontos uniformemente distribuídos no hipercubo [0,1]^dim,
+        cobrindo melhor o espaço do que amostragem puramente aleatória.
+
+        Essa implementação gera exatamente num_agents pontos.
+        """
+        # inicializa gerador de Halton para as dimensões desejadas
+        halton = Halton(d=num_dimensions, scramble=True)
+
+        # gera num_agents pontos no hipercubo [0,1]^dim
+        sample = halton.random(n=num_agents)
+
+        # mapeia os pontos do intervalo [0,1] para [-1,1]
+        # pois o Population trabalha internamente em [-1,1]
+        return sample * 2 - 1
+
+    @staticmethod
+    def _beta(num_dimensions, num_agents, a=0.5, b=0.5):
+        """
+        Inicializa população usando distribuição Beta.
+
+        A distribuição Beta é usada para gerar pontos uniformemente distribuídos
+        no intervalo [0,1]^dim, cobrindo melhor o espaço do que amostragem puramente aleatória.
+
+        Essa implementação gera exatamente num_agents pontos.
+        """
+        # Gera pontos uniformemente distribuídos no intervalo [0, 1]
+        sample = np.random.beta(a, b, size=(num_agents, num_dimensions))
+
+        # Mapeia os pontos do intervalo [0, 1] para [-1, 1]
+        return sample * 2 - 1
+
+    @staticmethod
+    # Normal (Gaussiana)
+    def _normal(num_dimensions, num_agents, mean=0.0, std=0.3):
+        sample = np.random.normal(mean, std, size=(num_agents, num_dimensions))
+        sample = np.clip(sample, -1, 1)
+        return sample
+
+    @staticmethod
+    # Log-normal
+    def _lognormal(num_dimensions, num_agents, mean=0.0, sigma=0.3):
+        sample = np.random.lognormal(mean, sigma, size=(num_agents, num_dimensions))
+        # Normaliza para [-1,1]
+        sample = sample / np.max(sample)
+        return sample * 2 - 1
+
+    @staticmethod
+    # Exponential
+    def _exponential(num_dimensions, num_agents, scale=1.0):
+        sample = np.random.exponential(scale, size=(num_agents, num_dimensions))
+        sample = sample / np.max(sample)
+        return sample * 2 - 1
+
+    @staticmethod
+    # Rayleigh
+    def _rayleigh(num_dimensions, num_agents, scale=1.0):
+        sample = np.random.rayleigh(scale, size=(num_agents, num_dimensions))
+        sample = sample / np.max(sample)
+        return sample * 2 - 1
+
+    @staticmethod
+    # Weibull
+    def _weibull(num_dimensions, num_agents, a=1.5):
+        sample = np.random.weibull(a, size=(num_agents, num_dimensions))
+        sample = sample / np.max(sample)
+        return sample * 2 - 1
+
 
     def _check_simple_constraints(self):
         """
@@ -416,56 +590,6 @@ class Population:
         else:
             raise PopulationError('Invalid selector!')
             return None
-
-    @staticmethod
-    def _sobol_sequence(num_agents, dim, directions_path=None):
-        if directions_path is None:
-            directions_path = os.path.join(os.path.dirname(__file__), 'sobol_directions.txt')
-        L = int(np.ceil(np.log2(num_agents)))
-
-        directions_raw = np.loadtxt(directions_path, dtype=int, ndmin=2)
-
-        if directions_raw.shape[0] < dim:
-            raise ValueError(f"Sobol file has {directions_raw.shape[0]} dims, requested {dim}")
-        if directions_raw.shape[1] < L:
-            raise ValueError(f"Sobol file has {directions_raw.shape[1]} bits, requested {L}")
-
-        directions = directions_raw[:dim, :L]
-
-        seq = np.zeros((num_agents, dim))
-        x_int = np.zeros(dim, dtype=int)
-
-        for i in range(num_agents):
-            if i == 0:
-                seq[i, :] = 0.0
-            else:
-                lsb = (i & -i).bit_length() - 1
-                for d in range(dim):
-                    x_int[d] ^= directions[d, lsb]
-                    seq[i, d] = x_int[d] / (1 << L)
-
-        return seq * 2 - 1
-
-    @staticmethod
-    def _sobol_scipy(num_agents, dim):
-        """
-        Inicializa população usando sequência de Sobol via SciPy.
-        Garante boa cobertura gerando 2^m >= num_agents pontos.
-        """
-        # calcula m tal que 2^m >= num_agents
-        m = int(np.ceil(np.log2(num_agents)))
-
-        # inicializa gerador
-        sobol = Sobol(d=dim, scramble=True)
-
-        # gera 2^m pontos
-        sample = sobol.random_base2(m)
-
-        # pega os primeiros num_agents pontos
-        seq = sample[:num_agents]
-
-        # mapeia para [-1,1]
-        return seq * 2 - 1
 
 class PopulationError(Exception):
     """
