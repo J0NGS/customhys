@@ -114,8 +114,8 @@ class Hyperheuristic:
                               repeat_operators=True,  # Allow repeating SOs inSeq,lvl:2
                               verbose=True,  # Verbose process,          lvl:2
                               learning_portion=0.37,  # Percent of seqs to learn  lvl:2
-                              solver='static')  # Indicate which solver use lvl:1
-
+                              solver='static', # Indicate which solver use lvl:1
+                              initial_scheme='random')  # Indicate scheme to generate initial solution
         # Read the problem
         if problem:
             self.problem = problem
@@ -134,7 +134,7 @@ class Hyperheuristic:
         # Initialise other parameters
         self.parameters = parameters
         self.file_label = file_label
-
+        self.initial_scheme = parameters.get('initial_scheme') or 'random'
         self.max_cardinality = None
         self.min_cardinality = None
         self.num_iterations = None
@@ -158,7 +158,7 @@ class Hyperheuristic:
         # First read the available actions. Those can be ...
         if available_options is None:
             available_options = ['Add', 'AddMany', 'Remove', 'RemoveMany', 'Shift', 'LocalShift', 'Swap', 'Restart',
-                                 'Mirror', 'Roll', 'RollMany']
+                                 'Mirror', 'Roll', 'RollMany']  
 
         # Black list (to avoid repeating the some actions in a row)
         if previous_action:
@@ -417,7 +417,7 @@ class Hyperheuristic:
         else:  # default: 'static'
             return self._solve_static(save_steps)
 
-    def _solve_static(self, save_steps=True):
+    def _solve_static(self, save_steps=True, initial_scheme='random'):
         """
         Run the hyper-heuristic based on Simulated Annealing (SA) to find the best metaheuristic. Each metaheuristic is
         run 'num_replicas' times to obtain statistics and then its performance. Once the process ends, it returns:
@@ -440,7 +440,7 @@ class Hyperheuristic:
 
         # Evaluate this solution
         #print("--- LOG: Avaliando solução inicial ---")
-        current_performance, current_details = self.evaluate_candidate_solution(current_solution)
+        current_performance, current_details = self.evaluate_candidate_solution(current_solution, initial_scheme=initial_scheme)
         #print(f"--- LOG: Performance inicial: {current_performance} ---")
 
         # Initialise some additional variables
@@ -846,7 +846,7 @@ class Hyperheuristic:
             model.save()
         return model
 
-    def evaluate_candidate_solution(self, encoded_sequence):
+    def evaluate_candidate_solution(self, encoded_sequence, initial_scheme='random'):
         """
         Evaluate the current sequence as a hyper/meta-heuristic. This process is repeated ``parameters['num_replicas']``
         times and, then, the performance is determined. In the end, the method returns the performance value and the
@@ -886,7 +886,7 @@ class Hyperheuristic:
                 # Call the metaheuristic
                 mh = Metaheuristic(self.problem, search_operators,
                                 self.parameters['num_agents'],
-                                self.num_iterations)
+                                self.num_iterations, initial_scheme=initial_scheme)
                 #print("--- LOG: Metaheuristic criada com sucesso ---")
 
                 # Run this metaheuristic
