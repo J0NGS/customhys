@@ -9,6 +9,8 @@ Created on Tue Sep 17 14:29:43 2019
 from math import isfinite
 
 import numpy as np
+import os
+from scipy.stats.qmc import Sobol
 
 __all__ = ['Population']
 __selectors__ = ['all', 'greedy', 'metropolis', 'probabilistic']
@@ -300,8 +302,11 @@ class Population:
         """
         if scheme == 'vertex':
             self._positions = self._grid_matrix(self.num_dimensions, self.num_agents)
+        elif scheme == 'sobol':
+            self._positions = self._sobol_scipy(self.num_agents, self.num_dimensions)
         else:
             self._positions = np.random.uniform(-1, 1, (self.num_agents, self.num_dimensions))
+
 
     # ================
     # INTERNAL METHODS
@@ -412,7 +417,55 @@ class Population:
             raise PopulationError('Invalid selector!')
             return None
 
+    @staticmethod
+    def _sobol_sequence(num_agents, dim, directions_path=None):
+        if directions_path is None:
+            directions_path = os.path.join(os.path.dirname(__file__), 'sobol_directions.txt')
+        L = int(np.ceil(np.log2(num_agents)))
 
+        directions_raw = np.loadtxt(directions_path, dtype=int, ndmin=2)
+
+        if directions_raw.shape[0] < dim:
+            raise ValueError(f"Sobol file has {directions_raw.shape[0]} dims, requested {dim}")
+        if directions_raw.shape[1] < L:
+            raise ValueError(f"Sobol file has {directions_raw.shape[1]} bits, requested {L}")
+
+        directions = directions_raw[:dim, :L]
+
+        seq = np.zeros((num_agents, dim))
+        x_int = np.zeros(dim, dtype=int)
+
+        for i in range(num_agents):
+            if i == 0:
+                seq[i, :] = 0.0
+            else:
+                lsb = (i & -i).bit_length() - 1
+                for d in range(dim):
+                    x_int[d] ^= directions[d, lsb]
+                    seq[i, d] = x_int[d] / (1 << L)
+
+        return seq * 2 - 1
+
+    @staticmethod
+    def _sobol_scipy(num_agents, dim):
+        """
+        Inicializa população usando sequência de Sobol via SciPy.
+        Garante boa cobertura gerando 2^m >= num_agents pontos.
+        """
+        # calcula m tal que 2^m >= num_agents
+        m = int(np.ceil(np.log2(num_agents)))
+
+        # inicializa gerador
+        sobol = Sobol(d=dim, scramble=True)
+
+        # gera 2^m pontos
+        sample = sobol.random_base2(m)
+
+        # pega os primeiros num_agents pontos
+        seq = sample[:num_agents]
+
+        # mapeia para [-1,1]
+        return seq * 2 - 1
 
 class PopulationError(Exception):
     """
