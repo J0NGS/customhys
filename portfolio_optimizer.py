@@ -113,24 +113,12 @@ def portfolio_evaluation(weights, instance_data, lambda_=0.5, k=None, risk_free_
     is_constrained = k is not None and k < n
     if not is_constrained:
         k = n
-
-    # Penalidade de separação (para garantir gap entre ativos dentro/fora)
-    penalidade_separacao = 0
-    if is_constrained:
-        COEF_PENALIDADE_SEP = 0.01
-        pesos_abs_ordenados = np.sort(np.abs(weights))[::-1]
-        limiar_entrada = pesos_abs_ordenados[k-1]
-        primeiro_fora = pesos_abs_ordenados[k]
-        gap = limiar_entrada - primeiro_fora
-        if gap < 0.1:
-            penalidade_separacao = COEF_PENALIDADE_SEP / (gap + 1e-6)
-
     # Algoritmo de reparo para restrições de piso/teto e cardinalidade
     selected_indices = np.argsort(weights)[-k:]
     selected_epsilon = epsilon[selected_indices]
     selected_delta = delta[selected_indices]
     if np.sum(selected_epsilon) > 1.0:
-        return 1e7 + penalidade_separacao, {"error": "Portfólio inviável: soma dos pisos > 1"}
+        return 1e7, {"error": "Portfólio inviável: soma dos pisos > 1"}
 
     final_k_weights = selected_epsilon.copy()
     free_assets_map = list(range(k))
@@ -156,7 +144,7 @@ def portfolio_evaluation(weights, instance_data, lambda_=0.5, k=None, risk_free_
     expected_return = np.dot(final_weights, returns)
     variance = np.dot(final_weights, np.dot(cov, final_weights))
     objective = lambda_ * variance - (1 - lambda_) * expected_return
-    final_objective = objective + penalidade_separacao
+    final_objective = objective
     risk = np.sqrt(variance)
     sharpe = (expected_return - risk_free_rate) / risk if risk > 0 else -1e6
     execution_log = {
@@ -168,7 +156,6 @@ def portfolio_evaluation(weights, instance_data, lambda_=0.5, k=None, risk_free_
         "sharpe": float(sharpe),
         "variance": float(variance),
         "objective": float(final_objective),
-        "separation_penalty": float(penalidade_separacao),
         "timestamp": datetime.now().isoformat()
     }
     # Limite de 5000 melhores soluções
