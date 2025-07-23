@@ -415,7 +415,8 @@ class Hyperheuristic:
         elif mode == 'neural_network':
             return self._solve_neural_network(save_steps)
         else:  # default: 'static'
-            return self._solve_static(save_steps)
+            # Passa o parâmetro correto para o método _solve_static
+            return self._solve_static(save_steps, initial_scheme=self.initial_scheme)
 
     def _solve_static(self, save_steps=True, initial_scheme='random'):
         """
@@ -478,7 +479,7 @@ class Hyperheuristic:
            # print("--- LOG: Avaliando candidato ---")
             if isinstance(candidate_solution, np.ndarray):
                 candidate_solution = candidate_solution.tolist()  # solução do problema, convertendo para list
-            candidate_performance, candidate_details = self.evaluate_candidate_solution(candidate_solution)
+            candidate_performance, candidate_details = self.evaluate_candidate_solution(candidate_solution, initial_scheme=initial_scheme)
             #print(f"--- LOG: Performance do candidato: {candidate_performance} ---")
 
             if self.parameters['verbose']:
