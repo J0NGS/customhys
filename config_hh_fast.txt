@@ -1,0 +1,22 @@
+{
+    "cardinality": 5,
+    "cardinality_min": 2,
+    "num_iterations": 20,
+    "num_agents": 10,
+    "as_mh": true,
+    "allow_weight_matrix": true,
+    "num_replicas": 3,
+    "num_steps": 5,
+    "stagnation_percentage": 0.40,
+    "max_temperature": 1,
+    "min_temperature": 1e-6,
+    "cooling_rate": 0.01,
+    "temperature_scheme": "fast",
+    "acceptance_scheme": "exponential",
+    "trial_overflow": false,
+    "repeat_operators": true,
+    "verbose": true,
+    "learning_portion": 0.3,
+    "solver": "static",
+    "initial_scheme": "sobol"
+}
