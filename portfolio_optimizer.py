@@ -21,7 +21,8 @@ from customhys.hyperheuristic import Hyperheuristic
 
 # Lista global para registrar os resultados de cada avaliação da função
 execution_logs = []
-
+BUFFER_SIZE = 1000  # ### MOD: número de logs em memória antes de salvar
+LOG_FILE_PATH = None  # ### MOD: caminho do arquivo de log incremental
 def read_or_library_instance(filepath):
     """
     Lê um arquivo de instância da OR-Library (ex: port1.txt) e retorna:
@@ -158,16 +159,17 @@ def portfolio_evaluation(weights, instance_data, lambda_=0.5, k=None, risk_free_
         "objective": float(final_objective),
         "timestamp": datetime.now().isoformat()
     }
-    # Limite de 5000 melhores soluções
-    MAX_LOGS = 5000
-    if len(execution_logs) < MAX_LOGS:
-        execution_logs.append(execution_log)
-    else:
-        # Encontrar a pior solução atual
-        worst_idx = max(range(len(execution_logs)), key=lambda i: execution_logs[i]["objective"])
-        if execution_log["objective"] < execution_logs[worst_idx]["objective"]:
-            execution_logs[worst_idx] = execution_log
-    return final_objective, execution_log
+    # ### MOD: salvar em disco quando atingir BUFFER_SIZE
+    execution_logs.append(execution_log)
+    if len(execution_logs) >= BUFFER_SIZE and LOG_FILE_PATH is not None:
+        df = pd.DataFrame(execution_logs)
+        if os.path.exists(LOG_FILE_PATH):
+            df.to_csv(LOG_FILE_PATH, mode='a', header=False, index=False)
+        else:
+            df.to_csv(LOG_FILE_PATH, mode='w', header=True, index=False)
+        execution_logs.clear()
+
+    return objective, execution_log
 
 def configure_problem(instance_data, k=None, risk_free_rate=0.03):
     """
@@ -236,10 +238,6 @@ def save_logs(output_dir, execution_logs, instance_data, hh_config, result):
     """
     Salva os logs e resultados em arquivos
     """
-    # Salva execution logs
-    execution_df = pd.DataFrame(execution_logs)
-    execution_df.to_csv(os.path.join(output_dir, "execution_logs.csv"), index=False)
-    
     # Salva configuração da HH
     with open(os.path.join(output_dir, "hh_config.json"), 'w') as f:
         json.dump(hh_config, f, indent=2)
@@ -340,6 +338,9 @@ def main():
     # Cria diretório de saída
     output_dir = create_output_directory(args.instance_file, hh_config.get('initial_scheme', 'unknown'))
     print(f"📁 Diretório de saída: {output_dir}")
+    global LOG_FILE_PATH  # para uso no portfolio_evaluation
+    LOG_FILE_PATH = os.path.join(output_dir, "execution_logs.csv")
+
     
     # Limpa logs antigos
     execution_logs.clear()
@@ -367,6 +368,13 @@ def main():
     # Salva logs e resultados
     print(f"\n💾 Salvando resultados...")
     try:
+        if execution_logs and LOG_FILE_PATH is not None:
+            df = pd.DataFrame(execution_logs)
+            if os.path.exists(LOG_FILE_PATH):
+                df.to_csv(LOG_FILE_PATH, mode='a', header=False, index=False)
+            else:
+                df.to_csv(LOG_FILE_PATH, mode='w', header=True, index=False)
+            execution_logs.clear()
         save_logs(output_dir, execution_logs, instance_data, hh_config, result)
         print(f"✅ Resultados salvos em: {output_dir}")
         print(f"   - execution_logs.csv: Log de todas as avaliações")
