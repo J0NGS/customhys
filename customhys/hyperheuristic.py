@@ -872,7 +872,7 @@ class Hyperheuristic:
             return None, None
         
         #print("--- LOG: search_operators validado ---")
-        print(f"{search_operators}")
+        #print(f"{search_operators}")
         
         # Initialise the historical registers
         historical_data = list()
@@ -892,7 +892,7 @@ class Hyperheuristic:
 
                 # Run this metaheuristic
                 mh.run()
-                print("--- LOG: Metaheuristic executada ---")
+                #print("--- LOG: Metaheuristic executada ---")
 
                 # Store the historical values from this run
                 historical_data.append(mh.historical)
@@ -908,7 +908,7 @@ class Hyperheuristic:
         # Determine a performance metric once finish the repetitions
         fitness_stats = self.get_statistics(fitness_data)
         
-       # print("--- LOG: Avaliação finalizada ---")
+        # print("--- LOG: Avaliação finalizada ---")
         #print(f"--- LOG: fitness_stats ---\n{fitness_stats}")
         
         # Return the performance value and the corresponding details

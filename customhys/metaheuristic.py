@@ -45,9 +45,9 @@ class Metaheuristic:
             if not isinstance(search_operators, list):
                 search_operators = [search_operators]
             #print("--- LOG: Estrutura de search_operators ---")
-            for i, op in enumerate(search_operators):
-                print(f"Operador {i}: {op}")
-            
+            #for i, op in enumerate(search_operators):
+            #    print(f"Operador {i}: {op}")
+
             self.perturbators, self.selectors = Operators.process_operators(search_operators)
             #print("--- LOG: process_operators executado com sucesso ---")
 
