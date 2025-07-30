@@ -10,6 +10,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import warnings
+from multiprocessing import Pool, cpu_count
+import time
 warnings.filterwarnings('ignore')
 
 # Constantes para labels dos gráficos
@@ -29,6 +31,78 @@ def load_efficient_frontier(file_path):
     except Exception as e:
         print(f"Erro ao carregar fronteira eficiente: {e}")
         return None
+
+def calculate_pareto_frontier_parallel(df_logs, n_processes=None):
+    """Calcula a fronteira de Pareto das soluções - versão paralelizada para datasets grandes."""
+    n_solutions = len(df_logs)
+    
+    # Para datasets pequenos, usar método sequencial otimizado
+    if n_solutions < 10000:
+        return calculate_pareto_frontier(df_logs)
+    
+    print(f"🚀 Calculando fronteira de Pareto com paralelização para {n_solutions} soluções")
+    
+    if n_processes is None:
+        n_processes = min(cpu_count(), 6)  # Limite para evitar overhead
+    
+    solutions = df_logs[['expected_return', 'risk']].values
+    indices = df_logs.index.values
+    
+    # Dividir em chunks para processamento paralelo
+    chunk_size = max(1000, n_solutions // (n_processes * 2))
+    chunks = []
+    for i in range(0, n_solutions, chunk_size):
+        end_idx = min(i + chunk_size, n_solutions)
+        chunks.append((solutions[i:end_idx], indices[i:end_idx], i))
+    
+    print(f"🔄 Processando {len(chunks)} chunks em {n_processes} processos")
+    
+    try:
+        with Pool(processes=n_processes) as pool:
+            chunk_results = pool.map(_find_pareto_in_chunk, chunks)
+        
+        # Combinar resultados e encontrar Pareto global
+        all_pareto_indices = []
+        for chunk_pareto_indices in chunk_results:
+            all_pareto_indices.extend(chunk_pareto_indices)
+        
+        # Segunda passada: encontrar Pareto entre os candidatos
+        if len(all_pareto_indices) > 1000:  # Se ainda há muitos candidatos
+            candidates_df = df_logs.loc[all_pareto_indices]
+            final_pareto = calculate_pareto_frontier(candidates_df)
+        else:
+            final_pareto = df_logs.loc[all_pareto_indices]
+            final_pareto = calculate_pareto_frontier(final_pareto)
+        
+        print(f"✅ Fronteira de Pareto calculada: {len(final_pareto)} pontos")
+        return final_pareto
+        
+    except Exception as e:
+        print(f"⚠️ Erro no cálculo paralelo de Pareto: {e}")
+        print("🔄 Fallback para método sequencial...")
+        return calculate_pareto_frontier(df_logs)
+
+def _find_pareto_in_chunk(chunk_data):
+    """Encontra pontos Pareto dentro de um chunk."""
+    solutions, indices, _ = chunk_data  # offset não é usado
+    n = len(solutions)
+    
+    if n == 0:
+        return []
+    
+    # Algoritmo otimizado para encontrar Pareto no chunk
+    sorted_indices = np.argsort(-solutions[:, 0])  # Ordenar por retorno decrescente
+    
+    pareto_mask = np.zeros(n, dtype=bool)
+    min_risk_so_far = float('inf')
+    
+    for i in sorted_indices:
+        current_risk = solutions[i, 1]
+        if current_risk < min_risk_so_far:
+            pareto_mask[i] = True
+            min_risk_so_far = current_risk
+    
+    return indices[pareto_mask].tolist()
 
 def calculate_pareto_frontier(df_logs):
     """Calcula a fronteira de Pareto das soluções - versão otimizada."""
@@ -53,6 +127,67 @@ def calculate_pareto_frontier(df_logs):
     
     pareto_df = df_logs.iloc[pareto_indices].copy().sort_values('risk')
     return pareto_df
+
+def calculate_igd_plus_parallel(pareto_front, reference_front, n_processes=None):
+    """Calcula o IGD+ entre a fronteira de Pareto e a fronteira de referência - versão paralelizada."""
+    if reference_front is None or len(reference_front) == 0:
+        return None
+        
+    pareto_points = pareto_front[['expected_return', 'risk']].values
+    ref_points = reference_front[['mean_return', 'std_dev']].values
+    
+    if len(pareto_points) == 0:
+        return float('inf')
+    
+    n_ref = len(ref_points)
+    n_pareto = len(pareto_points)
+    
+    # Para datasets pequenos, usar método sequencial
+    if n_ref * n_pareto < 50000:
+        return calculate_igd_plus(pareto_front, reference_front)
+    
+    print(f"🚀 Calculando IGD+ paralelo: {n_ref} pontos de referência vs {n_pareto} pontos Pareto")
+    
+    if n_processes is None:
+        n_processes = min(cpu_count(), 6)
+    
+    # Dividir pontos de referência em chunks
+    chunk_size = max(100, n_ref // (n_processes * 2))
+    chunks = []
+    for i in range(0, n_ref, chunk_size):
+        end_idx = min(i + chunk_size, n_ref)
+        chunks.append((ref_points[i:end_idx], pareto_points))
+    
+    try:
+        with Pool(processes=n_processes) as pool:
+            chunk_results = pool.map(_calculate_igd_chunk, chunks)
+        
+        # Combinar resultados
+        all_min_distances = []
+        for chunk_distances in chunk_results:
+            all_min_distances.extend(chunk_distances)
+        
+        return np.mean(all_min_distances)
+        
+    except Exception as e:
+        print(f"⚠️ Erro no cálculo paralelo de IGD+: {e}")
+        return calculate_igd_plus(pareto_front, reference_front)
+
+def _calculate_igd_chunk(chunk_data):
+    """Calcula IGD para um chunk de pontos de referência."""
+    ref_chunk, pareto_points = chunk_data
+    
+    # Usar broadcasting para calcular distâncias
+    ref_expanded = ref_chunk[:, np.newaxis, :]  # (n_ref_chunk, 1, 2)
+    pareto_expanded = pareto_points[np.newaxis, :, :]  # (1, n_pareto, 2)
+    
+    # Calcular todas as distâncias euclidianas
+    distances = np.sqrt(np.sum((ref_expanded - pareto_expanded)**2, axis=2))
+    
+    # Encontrar a distância mínima para cada ponto de referência no chunk
+    min_distances = np.min(distances, axis=1)
+    
+    return min_distances.tolist()
 
 def calculate_igd_plus(pareto_front, reference_front):
     """Calcula o IGD+ entre a fronteira de Pareto e a fronteira de referência - versão otimizada."""
@@ -152,6 +287,127 @@ def get_best_solutions_for_frontier(df_logs, n_solutions=100):
     best_solutions = df_logs.nsmallest(min(n_solutions, len(df_logs)), 'percent_error')
     return best_solutions
 
+def _process_frontier_batch_parallel(batch_data):
+    """Função auxiliar para processar um batch de pontos da fronteira em paralelo."""
+    (batch_frontier_risk, batch_frontier_return, solutions_risk, 
+     solutions_return, solutions_error, solutions_indices, n_solutions_per_point) = batch_data
+    
+    n_solutions = len(solutions_risk)
+    n_candidates = min(n_solutions_per_point * 2, n_solutions)
+    selected_indices_set = set()
+    
+    # Processar todos os pontos deste batch
+    for i in range(len(batch_frontier_risk)):
+        # Calcular distâncias para este ponto da fronteira
+        risk_diff = solutions_risk - batch_frontier_risk[i]
+        return_diff = solutions_return - batch_frontier_return[i]
+        distances = np.sqrt(risk_diff**2 + return_diff**2)
+        
+        # Encontrar candidatos mais próximos
+        closest_candidates_idx = np.argpartition(distances, n_candidates)[:n_candidates]
+        
+        # Entre os candidatos próximos, pegar os com menor erro
+        candidate_errors = solutions_error[closest_candidates_idx]
+        
+        # Ordenar por erro e pegar os melhores
+        best_error_order = np.argsort(candidate_errors)[:n_solutions_per_point]
+        selected_for_this_point = closest_candidates_idx[best_error_order]
+        
+        # Adicionar ao conjunto de índices selecionados
+        selected_indices_set.update(solutions_indices[selected_for_this_point])
+    
+    return list(selected_indices_set)
+
+def get_best_solutions_per_frontier_point_parallel(df_logs, frontier_points, n_solutions_per_point=100, n_processes=None):
+    """
+    Versão paralelizada da seleção das n melhores soluções para cada ponto da fronteira.
+    
+    Args:
+        df_logs: DataFrame com as soluções
+        frontier_points: DataFrame com os pontos da fronteira
+        n_solutions_per_point: Número de melhores soluções por ponto da fronteira
+        n_processes: Número de processos paralelos (None = auto)
+    
+    Returns:
+        DataFrame com todas as melhores soluções selecionadas
+    """
+    if 'percent_error' not in df_logs.columns:
+        print("⚠️ Coluna 'percent_error' não encontrada, usando método alternativo")
+        return df_logs.nsmallest(len(frontier_points) * n_solutions_per_point, 'objective')
+    
+    n_frontier_points = len(frontier_points)
+    n_solutions = len(df_logs)
+    
+    # Determinar número de processos
+    if n_processes is None:
+        n_processes = min(cpu_count(), 8)  # Máximo 8 processos para evitar overhead
+    
+    print(f"🚀 Processamento paralelo: {n_processes} processos")
+    print(f"🔍 Selecionando {n_solutions_per_point} melhores soluções para cada um dos {n_frontier_points} pontos da fronteira")
+    
+    # Converter para arrays numpy para otimização
+    solutions_risk = df_logs['risk'].values
+    solutions_return = df_logs['expected_return'].values
+    solutions_error = df_logs['percent_error'].values
+    solutions_indices = df_logs.index.values
+    
+    # Determinar o tipo de fronteira e extrair coordenadas
+    if 'std_dev' in frontier_points.columns:  # Fronteira eficiente
+        frontier_risk = frontier_points['std_dev'].values
+        frontier_return = frontier_points['mean_return'].values
+    else:  # Fronteira de Pareto
+        frontier_risk = frontier_points['risk'].values
+        frontier_return = frontier_points['expected_return'].values
+    
+    # Calcular tamanho do batch otimizado para paralelização
+    # Considerando overhead de criação de processos vs. eficiência
+    ideal_batch_size = max(1, n_frontier_points // (n_processes * 2))  # 2 batches por processo
+    batch_size = min(100, max(10, ideal_batch_size))  # Entre 10 e 100
+    
+    print(f"🔄 Processando em {n_processes} processos paralelos com batches de {batch_size} pontos")
+    
+    # Preparar dados para processamento paralelo
+    batch_data_list = []
+    for batch_start in range(0, n_frontier_points, batch_size):
+        batch_end = min(batch_start + batch_size, n_frontier_points)
+        batch_frontier_risk = frontier_risk[batch_start:batch_end]
+        batch_frontier_return = frontier_return[batch_start:batch_end]
+        
+        batch_data = (
+            batch_frontier_risk, batch_frontier_return,
+            solutions_risk, solutions_return, solutions_error, solutions_indices,
+            n_solutions_per_point
+        )
+        batch_data_list.append(batch_data)
+    
+    # Executar processamento paralelo
+    start_time = time.time()
+    try:
+        with Pool(processes=n_processes) as pool:
+            results = pool.map(_process_frontier_batch_parallel, batch_data_list)
+        
+        # Combinar resultados de todos os batches
+        selected_indices_set = set()
+        for batch_result in results:
+            selected_indices_set.update(batch_result)
+        
+        processing_time = time.time() - start_time
+        print(f"⚡ Processamento paralelo concluído em {processing_time:.2f}s")
+        
+    except Exception as e:
+        print(f"⚠️ Erro no processamento paralelo: {e}")
+        print("🔄 Fallback para processamento sequencial...")
+        return get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_per_point)
+    
+    # Converter conjunto para lista e criar DataFrame das soluções selecionadas
+    selected_indices_list = list(selected_indices_set)
+    combined_solutions = df_logs.loc[selected_indices_list].copy()
+    
+    print(f"✅ Selecionadas {len(combined_solutions)} soluções únicas")
+    print(f"📊 Erro médio das soluções selecionadas: {combined_solutions['percent_error'].mean():.6e}")
+    
+    return combined_solutions
+
 def get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_per_point=100):
     """
     Seleciona as n melhores soluções para cada ponto da fronteira baseado no erro de interpolação - versão otimizada com baixo uso de memória.
@@ -169,7 +425,6 @@ def get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_
         return df_logs.nsmallest(len(frontier_points) * n_solutions_per_point, 'objective')
     
     n_frontier_points = len(frontier_points)
-    n_solutions = len(df_logs)
     print(f"🔍 Selecionando {n_solutions_per_point} melhores soluções para cada um dos {n_frontier_points} pontos da fronteira")
     
     # Converter para arrays numpy para otimização
@@ -188,13 +443,13 @@ def get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_
     
     # Coletar índices das melhores soluções para cada ponto da fronteira
     selected_indices_set = set()
-    n_candidates = min(n_solutions_per_point * 2, n_solutions)  # Limitar candidatos para eficiência
+    n_candidates = min(n_solutions_per_point * 2, len(df_logs))  # Limitar candidatos para eficiência
     
     # Calcular tamanho do batch baseado na memória disponível
     # Estimativa: 8 bytes por float64, queremos usar no máximo ~100MB por batch
     max_memory_mb = 100
     max_elements_per_batch = (max_memory_mb * 1024 * 1024) // 8  # Elementos float64
-    batch_size = max(1, min(500, max_elements_per_batch // n_solutions))  # Pelo menos 1, máximo 500
+    batch_size = max(1, min(500, max_elements_per_batch // len(df_logs)))  # Pelo menos 1, máximo 500
     
     print(f"🔄 Processando em batches de {batch_size} pontos da fronteira para otimizar memória")
     
@@ -241,6 +496,44 @@ def get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_
     print(f"📊 Erro médio das soluções selecionadas: {combined_solutions['percent_error'].mean():.6e}")
     
     return combined_solutions
+
+def analyze_portfolio_results_fast(output_dir, efficient_frontier_file=None, n_processes=None):
+    """
+    Versão otimizada e paralelizada da análise de portfólio para datasets grandes.
+    Usa automaticamente processamento paralelo quando benéfico.
+    
+    Args:
+        output_dir: Diretório contendo os resultados
+        efficient_frontier_file: Arquivo da fronteira eficiente (opcional)
+        n_processes: Número de processos paralelos (None = auto)
+    
+    Returns:
+        dict: Métricas calculadas
+    """
+    return analyze_portfolio_results(
+        output_dir=output_dir,
+        efficient_frontier_file=efficient_frontier_file,
+        use_parallel=True,
+        n_processes=n_processes
+    )
+
+def analyze_portfolio_results_sequential(output_dir, efficient_frontier_file=None):
+    """
+    Versão sequencial da análise de portfólio (compatibilidade com versão original).
+    
+    Args:
+        output_dir: Diretório contendo os resultados
+        efficient_frontier_file: Arquivo da fronteira eficiente (opcional)
+    
+    Returns:
+        dict: Métricas calculadas
+    """
+    return analyze_portfolio_results(
+        output_dir=output_dir,
+        efficient_frontier_file=efficient_frontier_file,
+        use_parallel=False,
+        n_processes=None
+    )
 
 def calculate_hypervolume_2d(points, reference_point):
     """Calcula o hipervolume para problemas 2D (retorno vs risco)."""
@@ -567,8 +860,8 @@ def _load_and_validate_data(output_dir, efficient_frontier_file):
     
     return df_logs, efficient_frontier
 
-def _calculate_metrics(df_logs, efficient_frontier, pareto_frontier):
-    """Calcula todas as métricas de avaliação."""
+def _calculate_metrics(df_logs, efficient_frontier, pareto_frontier, use_parallel=True):
+    """Calcula todas as métricas de avaliação com opção de paralelização."""
     metrics = {}
     
     # Erros de interpolação
@@ -584,10 +877,13 @@ def _calculate_metrics(df_logs, efficient_frontier, pareto_frontier):
         metrics['median_interpolation_error'] = None
         print("⚠️ Erro de interpolação não calculado (fronteira eficiente indisponível)")
     
-    # IGD+
+    # IGD+ com paralelização opcional
     if efficient_frontier is not None:
         print("📐 Calculando IGD+...")
-        metrics['igd_plus'] = calculate_igd_plus(pareto_frontier, efficient_frontier)
+        if use_parallel:
+            metrics['igd_plus'] = calculate_igd_plus_parallel(pareto_frontier, efficient_frontier)
+        else:
+            metrics['igd_plus'] = calculate_igd_plus(pareto_frontier, efficient_frontier)
         print(f"✅ IGD+ calculado: {metrics['igd_plus']:.12e}")
     else:
         metrics['igd_plus'] = None
@@ -642,44 +938,68 @@ def _calculate_hypervolumes(df_logs, best_efficient_solutions, best_pareto_solut
         'reference_point_risk': ref_point[1]
     }
 
-def analyze_portfolio_results(output_dir, efficient_frontier_file=None):
+def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_parallel=True, n_processes=None):
     """
-    Função principal para análise dos resultados de otimização de portfólio - versão otimizada.
+    Função principal para análise dos resultados de otimização de portfólio - versão paralelizada.
     
     Args:
         output_dir: Diretório contendo os resultados
         efficient_frontier_file: Arquivo da fronteira eficiente (opcional)
+        use_parallel: Se True, usa processamento paralelo para acelerar cálculos (padrão: True)
+        n_processes: Número de processos paralelos (None = auto)
     """
     print(f"\n📊 Iniciando análise de dados para: {output_dir}")
+    
+    if use_parallel:
+        if n_processes is None:
+            n_processes = min(cpu_count(), 8)
+        print(f"🚀 Modo paralelo ativado com {n_processes} processos")
+    else:
+        print("🐌 Modo sequencial ativado")
+    
+    start_time = time.time()
     
     try:
         # 1. Carregar e validar dados
         df_logs, efficient_frontier = _load_and_validate_data(output_dir, efficient_frontier_file)
         
-        # 2. Calcular fronteira de Pareto
+        # 2. Calcular fronteira de Pareto com paralelização opcional
         print("🔍 Calculando fronteira de Pareto...")
-        pareto_frontier = calculate_pareto_frontier(df_logs)
+        if use_parallel and len(df_logs) > 10000:
+            pareto_frontier = calculate_pareto_frontier_parallel(df_logs, n_processes)
+        else:
+            pareto_frontier = calculate_pareto_frontier(df_logs)
         print(f"✅ Fronteira de Pareto calculada com {len(pareto_frontier)} pontos")
         
-        # 3. Calcular métricas (em paralelo conceitual)
-        df_logs, metrics = _calculate_metrics(df_logs, efficient_frontier, pareto_frontier)
+        # 3. Calcular métricas com paralelização opcional
+        df_logs, metrics = _calculate_metrics(df_logs, efficient_frontier, pareto_frontier, use_parallel)
         
-        # 4. Selecionar melhores soluções usando o novo método por ponto da fronteira
+        # 4. Selecionar melhores soluções usando versão paralelizada
         best_efficient_solutions = None
         best_pareto_solutions = None
         
         if efficient_frontier is not None and 'percent_error' in df_logs.columns:
             print("🏆 Selecionando melhores soluções para cada ponto da fronteira eficiente...")
-            best_efficient_solutions = get_best_solutions_per_frontier_point(
-                df_logs, efficient_frontier, n_solutions_per_point=100
-            )
+            if use_parallel:
+                best_efficient_solutions = get_best_solutions_per_frontier_point_parallel(
+                    df_logs, efficient_frontier, n_solutions_per_point=100, n_processes=n_processes
+                )
+            else:
+                best_efficient_solutions = get_best_solutions_per_frontier_point(
+                    df_logs, efficient_frontier, n_solutions_per_point=100
+                )
             print(f"✅ Selecionadas {len(best_efficient_solutions)} melhores soluções para fronteira eficiente")
         
         print("🏆 Selecionando melhores soluções para cada ponto da fronteira de Pareto...")
         if 'percent_error' in df_logs.columns:
-            best_pareto_solutions = get_best_solutions_per_frontier_point(
-                df_logs, pareto_frontier, n_solutions_per_point=100
-            )
+            if use_parallel:
+                best_pareto_solutions = get_best_solutions_per_frontier_point_parallel(
+                    df_logs, pareto_frontier, n_solutions_per_point=100, n_processes=n_processes
+                )
+            else:
+                best_pareto_solutions = get_best_solutions_per_frontier_point(
+                    df_logs, pareto_frontier, n_solutions_per_point=100
+                )
         else:
             # Fallback se não há erro de interpolação
             n_best = min(100, len(pareto_frontier))
@@ -694,7 +1014,9 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None):
         metrics.update({
             'total_evaluations': len(df_logs),
             'pareto_frontier_size': len(pareto_frontier),
-            'best_sharpe': df_logs['sharpe'].max() if 'sharpe' in df_logs.columns else None
+            'best_sharpe': df_logs['sharpe'].max() if 'sharpe' in df_logs.columns else None,
+            'processing_mode': 'parallel' if use_parallel else 'sequential',
+            'n_processes_used': n_processes if use_parallel else 1
         })
         
         # 7. Salvar dados
@@ -708,6 +1030,8 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None):
         )
         
         # 9. Exibir resumo
+        total_time = time.time() - start_time
+        print(f"\n⏱️ Tempo total de processamento: {total_time:.2f}s")
         _display_metrics_summary(metrics)
         
         print("="*60)
@@ -742,6 +1066,12 @@ def _display_metrics_summary(metrics):
     print("="*60)
     print(f"📈 Total de avaliações: {metrics['total_evaluations']}")
     print(f"🎯 Tamanho da fronteira de Pareto: {metrics['pareto_frontier_size']}")
+    
+    if 'processing_mode' in metrics:
+        mode_icon = "🚀" if metrics['processing_mode'] == 'parallel' else "🐌"
+        print(f"{mode_icon} Modo de processamento: {metrics['processing_mode']}")
+        if metrics['processing_mode'] == 'parallel':
+            print(f"⚙️ Processos utilizados: {metrics.get('n_processes_used', 'N/A')}")
     
     if metrics['igd_plus'] is not None:
         print(f"📐 IGD+: {metrics['igd_plus']:.12e}")
