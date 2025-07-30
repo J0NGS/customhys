@@ -77,7 +77,7 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
     
     return objective, execution_log
 
-def configure_problem(instance_data, k=None, risk_free_rate=0.03):
+def configure_problem(instance_data, k=None, risk_free_rate=0.03, lambda_= 0.5):
     n = instance_data["n_assets"]
     lower_bounds = [0.00] * n
     upper_bounds = [1.00] * n
@@ -85,7 +85,7 @@ def configure_problem(instance_data, k=None, risk_free_rate=0.03):
     delta = instance_data.get("delta", np.ones(n))
     
     return {
-        "function": lambda weights: portfolio_evaluation(weights, instance_data, lambda_=0.5, k=k, risk_free_rate=risk_free_rate, epsilon=epsilon, delta=delta)[0],
+        "function": lambda weights: portfolio_evaluation(weights, instance_data, lambda_=lambda_, k=k, risk_free_rate=risk_free_rate, epsilon=epsilon, delta=delta)[0],
         "is_constrained": True,
         "boundaries": (lower_bounds, upper_bounds),
     }

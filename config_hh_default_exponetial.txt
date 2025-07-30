@@ -17,6 +17,5 @@
     "repeat_operators": true,  
     "verbose": true,  
     "solver": "static",  
-    "initial_scheme": "halton"
+    "initial_scheme": "exponetial"
 }
-

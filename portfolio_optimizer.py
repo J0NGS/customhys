@@ -49,14 +49,15 @@ def main():
 
     # Configuração do problema para a HH
     print(f"\n⚙️  Configurando problema...")
-    problem_config = configure_problem(instance_data, k=k, risk_free_rate=0.03)
-    
+    problem_config = configure_problem(instance_data, k=k, risk_free_rate=0.03, lambda_= 0.5)
+
     evaluation_func_with_logger = partial(
         portfolio_evaluation, 
         instance_data=instance_data, 
         k=k, 
         risk_free_rate=0.03,
-        logger=logger 
+        logger=logger,
+        lambda_=0.5,
     )
     
     problem_config["function"] = lambda weights: evaluation_func_with_logger(weights)[0]
