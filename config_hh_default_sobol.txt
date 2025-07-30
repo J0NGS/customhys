@@ -12,7 +12,7 @@
     "min_temperature": 1e-6,  
     "cooling_rate": 1e-3,  
     "temperature_scheme": "fast",  
-    "acceptance_scheme": "probabilistic",  
+    "acceptance_scheme": "exponetial",  
     "trial_overflow": false,  
     "repeat_operators": true,  
     "verbose": true,  
