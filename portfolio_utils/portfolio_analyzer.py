@@ -19,6 +19,105 @@ EFFICIENT_FRONTIER_LABEL = "Fronteira Eficiente"
 RISK_LABEL = "Risco (Desvio Padrão)"
 RETURN_LABEL = "Retorno Esperado"
 
+# Variável global para controlar uso de recursos
+_RESOURCE_LOCK = None
+_MAX_PARALLEL_INSTANCES = 2
+
+def _get_safe_process_count():
+    """Calcula número seguro de processos baseado nos recursos disponíveis."""
+    try:
+        import psutil
+        
+        # Obter informações do sistema
+        cpu_count_logical = cpu_count()
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory_percent = psutil.virtual_memory().percent
+        
+        # Se CPU ou memória estão muito carregadas, reduzir paralelismo
+        if cpu_percent > 80 or memory_percent > 85:
+            safe_processes = max(1, cpu_count_logical // 4)
+            print(f"⚠️ Sistema sob carga (CPU: {cpu_percent:.1f}%, RAM: {memory_percent:.1f}%) - usando {safe_processes} processos")
+        elif cpu_percent > 60 or memory_percent > 70:
+            safe_processes = max(1, cpu_count_logical // 2)
+            print(f"⚠️ Sistema moderadamente carregado (CPU: {cpu_percent:.1f}%, RAM: {memory_percent:.1f}%) - usando {safe_processes} processos")
+        else:
+            # Sistema com recursos disponíveis, mas limitamos para evitar sobrecarga
+            safe_processes = min(cpu_count_logical - 1, 6)
+            
+        return max(1, safe_processes)
+        
+    except ImportError:
+        # Se psutil não está disponível, usar heurística conservadora
+        logical_cpus = cpu_count()
+        return max(1, min(logical_cpus // 2, 4))
+    except Exception:
+        # Em caso de erro, usar valor muito conservador
+        return 2
+
+def _should_use_parallel(data_size, min_threshold=5000):
+    """Determina se deve usar processamento paralelo baseado no tamanho dos dados."""
+    try:
+        import psutil
+        
+        # Verificar recursos do sistema
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory_percent = psutil.virtual_memory().percent
+        
+        # Se sistema está muito carregado, não usar paralelismo
+        if cpu_percent > 85 or memory_percent > 90:
+            print(f"🚫 Sistema sobrecarregado (CPU: {cpu_percent:.1f}%, RAM: {memory_percent:.1f}%) - forçando modo sequencial")
+            return False
+            
+        # Se dados são pequenos, não vale a pena o overhead
+        if data_size < min_threshold:
+            return False
+            
+        return True
+        
+    except ImportError:
+        # Se psutil não está disponível, usar apenas tamanho dos dados
+        return data_size >= min_threshold
+    except Exception:
+        # Em caso de erro, ser conservador
+        return False
+
+def _safe_parallel_execution(func, data_chunks, n_processes=None, fallback_func=None):
+    """Executa função em paralelo com tratamento de erros e fallback."""
+    if n_processes is None:
+        n_processes = _get_safe_process_count()
+    
+    try:
+        # Tentar execução paralela
+        with Pool(processes=n_processes) as pool:
+            results = pool.map(func, data_chunks)
+        return results, True  # Sucesso
+        
+    except (OSError, MemoryError, RuntimeError) as e:
+        print(f"⚠️ Erro no processamento paralelo: {e}")
+        print("🔄 Tentando com menos processos...")
+        
+        # Tentar com metade dos processos
+        try:
+            reduced_processes = max(1, n_processes // 2)
+            with Pool(processes=reduced_processes) as pool:
+                results = pool.map(func, data_chunks)
+            return results, True
+            
+        except Exception as e2:
+            print(f"⚠️ Erro mesmo com processos reduzidos: {e2}")
+            if fallback_func:
+                print("🔄 Executando fallback sequencial...")
+                return fallback_func(), False
+            else:
+                raise e2
+    except Exception as e:
+        print(f"❌ Erro inesperado no processamento paralelo: {e}")
+        if fallback_func:
+            print("🔄 Executando fallback sequencial...")
+            return fallback_func(), False
+        else:
+            raise
+
 def load_efficient_frontier(file_path):
     """Carrega a fronteira eficiente de um arquivo."""
     if not os.path.exists(file_path):
@@ -34,53 +133,61 @@ def load_efficient_frontier(file_path):
 
 def calculate_pareto_frontier_parallel(df_logs, n_processes=None):
     """Calcula a fronteira de Pareto das soluções - versão paralelizada para datasets grandes."""
-    n_solutions = len(df_logs)
+    data_size = len(df_logs)
     
-    # Para datasets pequenos, usar método sequencial otimizado
-    if n_solutions < 10000:
+    # Verificar se deve usar paralelização
+    if not _should_use_parallel(data_size, min_threshold=10000):
+        print(f"📊 Dataset pequeno ou sistema sobrecarregado ({data_size} soluções) - usando método sequencial")
         return calculate_pareto_frontier(df_logs)
     
-    print(f"🚀 Calculando fronteira de Pareto com paralelização para {n_solutions} soluções")
+    print(f"🚀 Calculando fronteira de Pareto com paralelização para {data_size} soluções")
     
+    # Obter número seguro de processos
     if n_processes is None:
-        n_processes = min(cpu_count(), 6)  # Limite para evitar overhead
+        n_processes = _get_safe_process_count()
     
     solutions = df_logs[['expected_return', 'risk']].values
     indices = df_logs.index.values
     
     # Dividir em chunks para processamento paralelo
-    chunk_size = max(1000, n_solutions // (n_processes * 2))
+    chunk_size = max(1000, data_size // (n_processes * 2))
     chunks = []
-    for i in range(0, n_solutions, chunk_size):
-        end_idx = min(i + chunk_size, n_solutions)
+    for i in range(0, data_size, chunk_size):
+        end_idx = min(i + chunk_size, data_size)
         chunks.append((solutions[i:end_idx], indices[i:end_idx], i))
     
     print(f"🔄 Processando {len(chunks)} chunks em {n_processes} processos")
     
-    try:
-        with Pool(processes=n_processes) as pool:
-            chunk_results = pool.map(_find_pareto_in_chunk, chunks)
-        
-        # Combinar resultados e encontrar Pareto global
-        all_pareto_indices = []
-        for chunk_pareto_indices in chunk_results:
-            all_pareto_indices.extend(chunk_pareto_indices)
-        
-        # Segunda passada: encontrar Pareto entre os candidatos
-        if len(all_pareto_indices) > 1000:  # Se ainda há muitos candidatos
-            candidates_df = df_logs.loc[all_pareto_indices]
-            final_pareto = calculate_pareto_frontier(candidates_df)
-        else:
-            final_pareto = df_logs.loc[all_pareto_indices]
-            final_pareto = calculate_pareto_frontier(final_pareto)
-        
-        print(f"✅ Fronteira de Pareto calculada: {len(final_pareto)} pontos")
-        return final_pareto
-        
-    except Exception as e:
-        print(f"⚠️ Erro no cálculo paralelo de Pareto: {e}")
-        print("🔄 Fallback para método sequencial...")
+    # Definir função de fallback
+    def fallback_sequential():
         return calculate_pareto_frontier(df_logs)
+    
+    # Executar com tratamento seguro
+    chunk_results, success = _safe_parallel_execution(
+        _find_pareto_in_chunk, 
+        chunks, 
+        n_processes, 
+        fallback_sequential
+    )
+    
+    if not success:
+        return chunk_results  # Já é o resultado do fallback
+    
+    # Combinar resultados e encontrar Pareto global
+    all_pareto_indices = []
+    for chunk_pareto_indices in chunk_results:
+        all_pareto_indices.extend(chunk_pareto_indices)
+    
+    # Segunda passada: encontrar Pareto entre os candidatos
+    if len(all_pareto_indices) > 1000:  # Se ainda há muitos candidatos
+        candidates_df = df_logs.loc[all_pareto_indices]
+        final_pareto = calculate_pareto_frontier(candidates_df)
+    else:
+        final_pareto = df_logs.loc[all_pareto_indices]
+        final_pareto = calculate_pareto_frontier(final_pareto)
+    
+    print(f"✅ Fronteira de Pareto calculada: {len(final_pareto)} pontos")
+    return final_pareto
 
 def _find_pareto_in_chunk(chunk_data):
     """Encontra pontos Pareto dentro de um chunk."""
@@ -141,15 +248,18 @@ def calculate_igd_plus_parallel(pareto_front, reference_front, n_processes=None)
     
     n_ref = len(ref_points)
     n_pareto = len(pareto_points)
+    data_complexity = n_ref * n_pareto
     
-    # Para datasets pequenos, usar método sequencial
-    if n_ref * n_pareto < 50000:
+    # Verificar se deve usar paralelização
+    if not _should_use_parallel(data_complexity, min_threshold=50000):
+        print(f"📊 Dataset pequeno ou sistema sobrecarregado ({n_ref}x{n_pareto}) - usando método sequencial")
         return calculate_igd_plus(pareto_front, reference_front)
     
     print(f"🚀 Calculando IGD+ paralelo: {n_ref} pontos de referência vs {n_pareto} pontos Pareto")
     
+    # Obter número seguro de processos
     if n_processes is None:
-        n_processes = min(cpu_count(), 6)
+        n_processes = _get_safe_process_count()
     
     # Dividir pontos de referência em chunks
     chunk_size = max(100, n_ref // (n_processes * 2))
@@ -158,20 +268,27 @@ def calculate_igd_plus_parallel(pareto_front, reference_front, n_processes=None)
         end_idx = min(i + chunk_size, n_ref)
         chunks.append((ref_points[i:end_idx], pareto_points))
     
-    try:
-        with Pool(processes=n_processes) as pool:
-            chunk_results = pool.map(_calculate_igd_chunk, chunks)
-        
-        # Combinar resultados
-        all_min_distances = []
-        for chunk_distances in chunk_results:
-            all_min_distances.extend(chunk_distances)
-        
-        return np.mean(all_min_distances)
-        
-    except Exception as e:
-        print(f"⚠️ Erro no cálculo paralelo de IGD+: {e}")
+    # Definir função de fallback
+    def fallback_sequential():
         return calculate_igd_plus(pareto_front, reference_front)
+    
+    # Executar com tratamento seguro
+    chunk_results, success = _safe_parallel_execution(
+        _calculate_igd_chunk, 
+        chunks, 
+        n_processes, 
+        fallback_sequential
+    )
+    
+    if not success:
+        return chunk_results  # Já é o resultado do fallback
+    
+    # Combinar resultados
+    all_min_distances = []
+    for chunk_distances in chunk_results:
+        all_min_distances.extend(chunk_distances)
+    
+    return np.mean(all_min_distances)
 
 def _calculate_igd_chunk(chunk_data):
     """Calcula IGD para um chunk de pontos de referência."""
@@ -336,11 +453,17 @@ def get_best_solutions_per_frontier_point_parallel(df_logs, frontier_points, n_s
         return df_logs.nsmallest(len(frontier_points) * n_solutions_per_point, 'objective')
     
     n_frontier_points = len(frontier_points)
-    n_solutions = len(df_logs)
+    data_size = len(df_logs)
+    data_complexity = n_frontier_points * data_size
     
-    # Determinar número de processos
+    # Verificar se deve usar paralelização
+    if not _should_use_parallel(data_complexity, min_threshold=500000):
+        print(f"📊 Dataset pequeno ou sistema sobrecarregado - usando método sequencial")
+        return get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_per_point)
+    
+    # Obter número seguro de processos
     if n_processes is None:
-        n_processes = min(cpu_count(), 8)  # Máximo 8 processos para evitar overhead
+        n_processes = _get_safe_process_count()
     
     print(f"🚀 Processamento paralelo: {n_processes} processos")
     print(f"🔍 Selecionando {n_solutions_per_point} melhores soluções para cada um dos {n_frontier_points} pontos da fronteira")
@@ -382,22 +505,29 @@ def get_best_solutions_per_frontier_point_parallel(df_logs, frontier_points, n_s
     
     # Executar processamento paralelo
     start_time = time.time()
-    try:
-        with Pool(processes=n_processes) as pool:
-            results = pool.map(_process_frontier_batch_parallel, batch_data_list)
-        
-        # Combinar resultados de todos os batches
-        selected_indices_set = set()
-        for batch_result in results:
-            selected_indices_set.update(batch_result)
-        
-        processing_time = time.time() - start_time
-        print(f"⚡ Processamento paralelo concluído em {processing_time:.2f}s")
-        
-    except Exception as e:
-        print(f"⚠️ Erro no processamento paralelo: {e}")
-        print("🔄 Fallback para processamento sequencial...")
+    
+    # Definir função de fallback
+    def fallback_sequential():
         return get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_per_point)
+    
+    # Executar com tratamento seguro
+    results, success = _safe_parallel_execution(
+        _process_frontier_batch_parallel, 
+        batch_data_list, 
+        n_processes, 
+        fallback_sequential
+    )
+    
+    if not success:
+        return results  # Já é o resultado do fallback
+    
+    processing_time = time.time() - start_time
+    print(f"⚡ Processamento paralelo concluído em {processing_time:.2f}s")
+    
+    # Combinar resultados de todos os batches
+    selected_indices_set = set()
+    for batch_result in results:
+        selected_indices_set.update(batch_result)
     
     # Converter conjunto para lista e criar DataFrame das soluções selecionadas
     selected_indices_list = list(selected_indices_set)
@@ -638,35 +768,94 @@ def _calculate_cardinalidade_optimized(df_logs):
     return df_logs
 
 def _plot_efficient_vs_all(output_dir, df_logs, efficient_frontier, pareto_frontier=None):
-    """Plota fronteira eficiente vs todas as soluções."""
+    """Plota fronteira eficiente vs todas as soluções com controle de recursos."""
+    
+    # Configurar matplotlib para melhor performance com muitos pontos
     plt.figure(figsize=(12, 8))
     
-    # Plotar TODAS as soluções sem subsampling
     n_points = len(df_logs)
-    print(f"📊 Plotando TODAS as {n_points} soluções")
+    print(f"📊 Preparando plot com {n_points} soluções")
+    
+    # Aplicar subsampling inteligente para datasets muito grandes
+    max_plot_points = 100000  # Limite para evitar crash
+    
+    if n_points > max_plot_points:
+        print(f"⚠️ Dataset muito grande ({n_points} pontos), aplicando subsampling para {max_plot_points} pontos")
+        
+        # Sempre incluir pontos especiais (extremos)
+        best_return_idx = df_logs["expected_return"].idxmax()
+        worst_return_idx = df_logs["expected_return"].idxmin()
+        best_risk_idx = df_logs["risk"].idxmin()
+        worst_risk_idx = df_logs["risk"].idxmax()
+        special_indices = {best_return_idx, worst_return_idx, best_risk_idx, worst_risk_idx}
+        
+        # Se há Sharpe, incluir o melhor
+        if 'sharpe' in df_logs.columns:
+            best_sharpe_idx = df_logs["sharpe"].idxmax()
+            special_indices.add(best_sharpe_idx)
+        
+        # Converter set para list para compatibilidade com pandas
+        special_indices_list = list(special_indices)
+        
+        # Amostrar o restante
+        remaining_df = df_logs.drop(special_indices_list)
+        n_remaining_sample = max(0, max_plot_points - len(special_indices_list))
+        
+        if len(remaining_df) > 0 and n_remaining_sample > 0:
+            sampled_remaining = remaining_df.sample(n=min(n_remaining_sample, len(remaining_df)), random_state=42)
+            plot_df = pd.concat([df_logs.loc[special_indices_list], sampled_remaining])
+        else:
+            plot_df = df_logs.loc[special_indices_list]
+        
+        print(f"📊 Plotando {len(plot_df)} pontos (incluindo extremos importantes)")
+    else:
+        plot_df = df_logs
+        print(f"📊 Plotando todos os {n_points} pontos")
     
     # Usar alpha e tamanho de ponto adaptativos para melhor visualização
-    if n_points > 50000:
-        alpha = 0.2
-        point_size = 4
-    elif n_points > 10000:
+    plot_points = len(plot_df)
+    if plot_points > 50000:
+        alpha = 0.15
+        point_size = 2
+    elif plot_points > 25000:
+        alpha = 0.25
+        point_size = 3
+    elif plot_points > 10000:
         alpha = 0.4
-        point_size = 6
+        point_size = 4
     else:
         alpha = 0.6
-        point_size = 8
+        point_size = 6
     
-    plt.scatter(df_logs["risk"], df_logs["expected_return"], 
-               s=point_size, color='gray', alpha=alpha, label="Todas as Soluções", rasterized=True)
+    try:
+        # Plotar com configurações otimizadas
+        plt.scatter(plot_df["risk"], plot_df["expected_return"], 
+                   s=point_size, color='gray', alpha=alpha, label="Soluções", 
+                   rasterized=True, edgecolors='none')  # edgecolors='none' melhora performance
+    except MemoryError:
+        print("⚠️ Erro de memória ao plotar, tentando com ainda menos pontos...")
+        # Fallback com ainda menos pontos
+        fallback_points = min(10000, len(plot_df))
+        plot_df_fallback = plot_df.sample(n=fallback_points, random_state=42)
+        plt.scatter(plot_df_fallback["risk"], plot_df_fallback["expected_return"], 
+                   s=3, color='gray', alpha=0.3, label=f"Soluções (amostra de {fallback_points})", 
+                   rasterized=True, edgecolors='none')
     
-    # Destacar a fronteira de Pareto se fornecida (ela já está incluída em df_logs)
+    # Destacar a fronteira de Pareto se fornecida
     if pareto_frontier is not None and len(pareto_frontier) > 0:
-        plt.scatter(pareto_frontier["risk"], pareto_frontier["expected_return"], 
-                   s=point_size*2, color='red', alpha=0.8, label="Fronteira de Pareto", zorder=4, 
-                   edgecolors='darkred', linewidths=0.5)
+        try:
+            plt.scatter(pareto_frontier["risk"], pareto_frontier["expected_return"], 
+                       s=point_size*2, color='red', alpha=0.8, label="Fronteira de Pareto", zorder=4, 
+                       edgecolors='darkred', linewidths=0.5)
+        except Exception as e:
+            print(f"⚠️ Erro ao plotar fronteira de Pareto: {e}")
     
-    plt.plot(efficient_frontier["std_dev"], efficient_frontier["mean_return"], 
-            color='blue', linewidth=2, label=EFFICIENT_FRONTIER_LABEL)
+    # Plotar fronteira eficiente
+    try:
+        plt.plot(efficient_frontier["std_dev"], efficient_frontier["mean_return"], 
+                color='blue', linewidth=2, label=EFFICIENT_FRONTIER_LABEL)
+    except Exception as e:
+        print(f"⚠️ Erro ao plotar fronteira eficiente: {e}")
 
     # Coletar todas as soluções especiais para detectar sobreposições
     special_solutions = []
@@ -734,19 +923,42 @@ def _plot_efficient_vs_all(output_dir, df_logs, efficient_frontier, pareto_front
             risk_pos += offset_distance * math.cos(angle)
             return_pos += offset_distance * math.sin(angle)
         
-        plt.scatter(risk_pos, return_pos, s=120, color=solution['color'], 
-                   edgecolor='black', alpha=0.8, label=solution['label'], zorder=5)
+        try:
+            plt.scatter(risk_pos, return_pos, s=120, color=solution['color'], 
+                       edgecolor='black', alpha=0.8, label=solution['label'], zorder=5)
+        except Exception as e:
+            print(f"⚠️ Erro ao plotar solução especial {solution['type']}: {e}")
         
         plotted_positions.append((risk_pos, return_pos))
     
-    plt.title("Fronteira Eficiente vs Todas as Soluções")
-    plt.xlabel(RISK_LABEL)
-    plt.ylabel(RETURN_LABEL)
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "fronteira_eficiente_vs_todas.png"), dpi=150, bbox_inches='tight')
-    plt.close()
+    # Finalizar gráfico com tratamento de erro
+    try:
+        plt.title("Fronteira Eficiente vs Soluções")
+        plt.xlabel(RISK_LABEL)
+        plt.ylabel(RETURN_LABEL)
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='best', fontsize='small')  # Fonte menor e localização automática
+        plt.tight_layout()
+        
+        # Salvar com tratamento de erro
+        output_path = os.path.join(output_dir, "fronteira_eficiente_vs_todas.png")
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"✅ Gráfico salvo: {output_path}")
+        
+    except Exception as e:
+        print(f"⚠️ Erro ao finalizar/salvar gráfico: {e}")
+        # Tentar salvar versão simplificada
+        try:
+            plt.title("Fronteira Eficiente vs Soluções")
+            plt.xlabel(RISK_LABEL)
+            plt.ylabel(RETURN_LABEL)
+            simple_path = os.path.join(output_dir, "fronteira_eficiente_vs_todas_simples.png")
+            plt.savefig(simple_path, dpi=100)
+            print(f"✅ Gráfico simplificado salvo: {simple_path}")
+        except Exception as e2:
+            print(f"❌ Falha ao salvar gráfico: {e2}")
+    finally:
+        plt.close()  # Sempre fechar para liberar memória
 
 def _plot_efficient_vs_pareto(output_dir, efficient_frontier, pareto_frontier):
     """Plota fronteira eficiente vs fronteira de Pareto."""
@@ -805,34 +1017,56 @@ def plot_frontiers_comparison(output_dir, df_logs, efficient_frontier=None, pare
     plt.ioff()  # Desabilitar modo interativo
     
     try:
+        print("📈 Gerando gráficos...")
+        
         # Gráfico 1: Fronteira eficiente vs todas as soluções
         if efficient_frontier is not None:
-            _plot_efficient_vs_all(output_dir, df_logs, efficient_frontier, pareto_frontier)
+            try:
+                _plot_efficient_vs_all(output_dir, df_logs, efficient_frontier, pareto_frontier)
+            except Exception as e:
+                print(f"⚠️ Erro ao gerar gráfico 1 (fronteira vs todas): {e}")
         
         # Gráfico 2: Fronteira eficiente vs fronteira de Pareto
         if efficient_frontier is not None and pareto_frontier is not None:
-            _plot_efficient_vs_pareto(output_dir, efficient_frontier, pareto_frontier)
+            try:
+                _plot_efficient_vs_pareto(output_dir, efficient_frontier, pareto_frontier)
+            except Exception as e:
+                print(f"⚠️ Erro ao gerar gráfico 2 (fronteira vs Pareto): {e}")
         
         # Gráfico 3: Fronteira eficiente vs melhores soluções (interpolação)
         if efficient_frontier is not None and best_efficient is not None:
-            _plot_efficient_vs_best(
-                output_dir, efficient_frontier, best_efficient, 
-                "fronteira_eficiente_vs_melhores_interpolacao.png",
-                "100 Melhores (Erro Interpolação)"
-            )
+            try:
+                _plot_efficient_vs_best(
+                    output_dir, efficient_frontier, best_efficient, 
+                    "fronteira_eficiente_vs_melhores_interpolacao.png",
+                    "100 Melhores (Erro Interpolação)"
+                )
+            except Exception as e:
+                print(f"⚠️ Erro ao gerar gráfico 3 (melhores interpolação): {e}")
         
         # Gráfico 4: Fronteira eficiente vs melhores soluções (Pareto)
         if efficient_frontier is not None and best_pareto is not None:
-            _plot_efficient_vs_best(
-                output_dir, efficient_frontier, best_pareto,
-                "fronteira_eficiente_vs_melhores_pareto.png", 
-                "100 Melhores (Pareto)"
-            )
+            try:
+                _plot_efficient_vs_best(
+                    output_dir, efficient_frontier, best_pareto,
+                    "fronteira_eficiente_vs_melhores_pareto.png", 
+                    "100 Melhores (Pareto)"
+                )
+            except Exception as e:
+                print(f"⚠️ Erro ao gerar gráfico 4 (melhores Pareto): {e}")
         
         # Gráfico 5: Histograma da cardinalidade
         if 'selected_assets' in df_logs.columns:
-            _plot_cardinalidade_histogram(output_dir, df_logs)
-            
+            try:
+                _plot_cardinalidade_histogram(output_dir, df_logs)
+            except Exception as e:
+                print(f"⚠️ Erro ao gerar histograma de cardinalidade: {e}")
+                
+        print("✅ Gráficos gerados com sucesso!")
+        
+    except Exception as e:
+        print(f"❌ Erro geral na geração de gráficos: {e}")
+        
     finally:
         # Reabilitar modo interativo
         plt.ion()
@@ -950,11 +1184,20 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
     """
     print(f"\n📊 Iniciando análise de dados para: {output_dir}")
     
+    # Verificar se sistema está sob pressão e ajustar configurações
     if use_parallel:
         if n_processes is None:
-            n_processes = min(cpu_count(), 8)
-        print(f"🚀 Modo paralelo ativado com {n_processes} processos")
+            n_processes = _get_safe_process_count()
+        
+        # Verificar se vale a pena usar paralelismo
+        if not _should_use_parallel(1000):  # Threshold baixo para teste básico
+            print("⚠️ Sistema sobrecarregado - forçando modo sequencial")
+            use_parallel = False
+            n_processes = 1
+        else:
+            print(f"🚀 Modo paralelo ativado com {n_processes} processos")
     else:
+        n_processes = 1
         print("🐌 Modo sequencial ativado")
     
     start_time = time.time()
@@ -963,43 +1206,30 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
         # 1. Carregar e validar dados
         df_logs, efficient_frontier = _load_and_validate_data(output_dir, efficient_frontier_file)
         
-        # 2. Calcular fronteira de Pareto com paralelização opcional
+        # 2. Calcular fronteira de Pareto com paralelização automática
         print("🔍 Calculando fronteira de Pareto...")
-        if use_parallel and len(df_logs) > 10000:
-            pareto_frontier = calculate_pareto_frontier_parallel(df_logs, n_processes)
-        else:
-            pareto_frontier = calculate_pareto_frontier(df_logs)
+        pareto_frontier = calculate_pareto_frontier_parallel(df_logs, n_processes)
         print(f"✅ Fronteira de Pareto calculada com {len(pareto_frontier)} pontos")
         
         # 3. Calcular métricas com paralelização opcional
         df_logs, metrics = _calculate_metrics(df_logs, efficient_frontier, pareto_frontier, use_parallel)
         
-        # 4. Selecionar melhores soluções usando versão paralelizada
+        # 4. Selecionar melhores soluções com paralelização automática
         best_efficient_solutions = None
         best_pareto_solutions = None
         
         if efficient_frontier is not None and 'percent_error' in df_logs.columns:
             print("🏆 Selecionando melhores soluções para cada ponto da fronteira eficiente...")
-            if use_parallel:
-                best_efficient_solutions = get_best_solutions_per_frontier_point_parallel(
-                    df_logs, efficient_frontier, n_solutions_per_point=100, n_processes=n_processes
-                )
-            else:
-                best_efficient_solutions = get_best_solutions_per_frontier_point(
-                    df_logs, efficient_frontier, n_solutions_per_point=100
-                )
+            best_efficient_solutions = get_best_solutions_per_frontier_point_parallel(
+                df_logs, efficient_frontier, n_solutions_per_point=100, n_processes=n_processes
+            )
             print(f"✅ Selecionadas {len(best_efficient_solutions)} melhores soluções para fronteira eficiente")
         
         print("🏆 Selecionando melhores soluções para cada ponto da fronteira de Pareto...")
         if 'percent_error' in df_logs.columns:
-            if use_parallel:
-                best_pareto_solutions = get_best_solutions_per_frontier_point_parallel(
-                    df_logs, pareto_frontier, n_solutions_per_point=100, n_processes=n_processes
-                )
-            else:
-                best_pareto_solutions = get_best_solutions_per_frontier_point(
-                    df_logs, pareto_frontier, n_solutions_per_point=100
-                )
+            best_pareto_solutions = get_best_solutions_per_frontier_point_parallel(
+                df_logs, pareto_frontier, n_solutions_per_point=100, n_processes=n_processes
+            )
         else:
             # Fallback se não há erro de interpolação
             n_best = min(100, len(pareto_frontier))
