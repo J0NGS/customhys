@@ -1,0 +1,22 @@
+{
+    "cardinality": 10,  
+    "cardinality_min": 1,  
+    "num_iterations":100, 
+    "num_agents": 10,  
+    "as_mh": true,  
+    "allow_weight_matrix": true,  
+    "num_replicas": 15,  
+    "num_steps": 50,
+    "stagnation_percentage": 0.30,  
+    "max_temperature": 1,  
+    "min_temperature": 1e-6,  
+    "cooling_rate": 1e-3,  
+    "temperature_scheme": "fast",  
+    "acceptance_scheme": "exponetial",  
+    "trial_overflow": false,  
+    "repeat_operators": true,  
+    "verbose": true,  
+    "solver": "static",  
+    "initial_scheme": "halton"
+}
+

@@ -72,7 +72,8 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
         "timestamp": datetime.now().isoformat()
     }
     
-    if logger:
+    # Ignora soluções onde tanto risco quanto retorno são 0 no log
+    if logger and not (risk == 0 or expected_return == 0):
         logger.log(execution_log)
     
     return objective, execution_log
