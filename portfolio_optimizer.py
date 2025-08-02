@@ -45,7 +45,8 @@ def main():
     print(f"📁 Diretório de saída: {output_dir}")
     
     log_file_path = os.path.join(output_dir, "execution_logs.csv")
-    logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=1000)
+    from portfolio_utils.milestone_logger import MilestoneLogger
+    logger = MilestoneLogger(log_file_path=log_file_path, initial_interval=1)
 
     # Configuração do problema para a HH
     print(f"\n⚙️  Configurando problema...")
