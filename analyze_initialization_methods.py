@@ -100,6 +100,7 @@ def calculate_interpolation_metrics(execution_folder, efficient_returns, efficie
             pareto_errors = calculate_interpolation_error(pareto_data, efficient_returns, efficient_risks)
             if pareto_errors is not None:
                 metrics['pareto_interp_mean'] = np.mean(pareto_errors)
+                metrics['pareto_interp_median'] = np.median(pareto_errors)  # NOVA MÉTRICA
                 metrics['pareto_interp_std'] = np.std(pareto_errors)
                 metrics['pareto_interp_min'] = np.min(pareto_errors)
                 metrics['pareto_interp_max'] = np.max(pareto_errors)
@@ -114,6 +115,7 @@ def calculate_interpolation_metrics(execution_folder, efficient_returns, efficie
             best_errors = calculate_interpolation_error(best_data, efficient_returns, efficient_risks)
             if best_errors is not None:
                 metrics['best_pareto_interp_mean'] = np.mean(best_errors)
+                metrics['best_pareto_interp_median'] = np.median(best_errors)  # NOVA MÉTRICA
                 metrics['best_pareto_interp_std'] = np.std(best_errors)
                 metrics['best_pareto_interp_min'] = np.min(best_errors)
                 metrics['best_pareto_interp_max'] = np.max(best_errors)
@@ -243,7 +245,7 @@ def collect_all_metrics(execution_folders, efficient_frontier_file=None):
                 else:
                     print(f"      ❌ {os.path.basename(folder)}")
     
-    print(f"\n📈 Resumo da coleta:")
+    print("\n📈 Resumo da coleta:")
     print(f"   - Total de execuções encontradas: {total_executions}")
     print(f"   - Métricas carregadas com sucesso: {successful_loads}")
     print(f"   - Taxa de sucesso: {successful_loads/total_executions*100:.1f}%")
@@ -278,12 +280,15 @@ def calculate_statistics(metrics_list):
         'best_sharpe': {'mean', 'max', 'std'},
         'pareto_frontier_size': {'mean', 'max', 'std'},
         'total_evaluations': {'mean', 'std'},
-        # NOVAS MÉTRICAS DE INTERPOLAÇÃO
+        # MÉTRICAS DE INTERPOLAÇÃO - FRONTEIRA DE PARETO
         'pareto_interp_mean': {'mean', 'std', 'min', 'max'},
+        'pareto_interp_median': {'mean', 'median', 'std', 'min', 'max'},  # NOVA MÉTRICA
         'pareto_interp_std': {'mean', 'std'},
         'pareto_interp_min': {'mean', 'min'},
         'pareto_interp_max': {'mean', 'max'},
+        # MÉTRICAS DE INTERPOLAÇÃO - BEST PARETO
         'best_pareto_interp_mean': {'mean', 'std', 'min', 'max'},
+        'best_pareto_interp_median': {'mean', 'median', 'std', 'min', 'max'},  # NOVA MÉTRICA
         'best_pareto_interp_std': {'mean', 'std'},
         'best_pareto_interp_min': {'mean', 'min'},
         'best_pareto_interp_max': {'mean', 'max'}
@@ -364,18 +369,31 @@ def generate_comparison_table(aggregated_stats):
                 sharpe = stats['best_sharpe']
                 row['Best_Sharpe'] = f"{sharpe.get('mean', 0):.4f} / {sharpe.get('max', 0):.4f}"
             
-            # NOVAS MÉTRICAS DE INTERPOLAÇÃO
-            # Interpolação da Fronteira de Pareto (menor é melhor)
+            # MÉTRICAS DE INTERPOLAÇÃO - FRONTEIRA DE PARETO
+            # Interpolação da Fronteira de Pareto - MÉDIA (menor é melhor)
             if 'pareto_interp_mean' in stats:
                 pareto_interp = stats['pareto_interp_mean']
-                row['Pareto_Interp_Error'] = f"{pareto_interp.get('mean', 0):.6f} ± {pareto_interp.get('std', 0):.6f}"
-                row['Pareto_Interp_Min'] = f"{pareto_interp.get('min', 0):.6f}"
+                row['Pareto_Interp_Mean'] = f"{pareto_interp.get('mean', 0):.6f} ± {pareto_interp.get('std', 0):.6f}"
+                row['Pareto_Interp_Mean_Min'] = f"{pareto_interp.get('min', 0):.6f}"
             
-            # Interpolação do Best Pareto (menor é melhor)
+            # Interpolação da Fronteira de Pareto - MEDIANA (menor é melhor)
+            if 'pareto_interp_median' in stats:
+                pareto_median = stats['pareto_interp_median']
+                row['Pareto_Interp_Median'] = f"{pareto_median.get('median', 0):.6f} ± {pareto_median.get('std', 0):.6f}"
+                row['Pareto_Interp_Median_Min'] = f"{pareto_median.get('min', 0):.6f}"
+            
+            # MÉTRICAS DE INTERPOLAÇÃO - BEST PARETO
+            # Interpolação do Best Pareto - MÉDIA (menor é melhor)
             if 'best_pareto_interp_mean' in stats:
                 best_interp = stats['best_pareto_interp_mean']
-                row['Best_Pareto_Interp_Error'] = f"{best_interp.get('mean', 0):.6f} ± {best_interp.get('std', 0):.6f}"
-                row['Best_Pareto_Interp_Min'] = f"{best_interp.get('min', 0):.6f}"
+                row['Best_Pareto_Interp_Mean'] = f"{best_interp.get('mean', 0):.6f} ± {best_interp.get('std', 0):.6f}"
+                row['Best_Pareto_Interp_Mean_Min'] = f"{best_interp.get('min', 0):.6f}"
+            
+            # Interpolação do Best Pareto - MEDIANA (menor é melhor)
+            if 'best_pareto_interp_median' in stats:
+                best_median = stats['best_pareto_interp_median']
+                row['Best_Pareto_Interp_Median'] = f"{best_median.get('median', 0):.6f} ± {best_median.get('std', 0):.6f}"
+                row['Best_Pareto_Interp_Median_Min'] = f"{best_median.get('min', 0):.6f}"
             
             # Tamanho da fronteira de Pareto
             if 'pareto_frontier_size' in stats:
@@ -473,9 +491,9 @@ def print_summary_report(comparison_df):
         print(f"\n🎯 INSTÂNCIA: {instancia}")
         print("-" * 50)
         
-        # Tabela resumida com novas métricas
-        print(f"{'Método':<15} {'N_Exec':<6} {'Avg_Error':<12} {'HV_General':<12} {'Best_Sharpe':<15} {'Pareto_Interp':<12} {'Best_Interp':<12}")
-        print("-" * 100)
+        # Tabela resumida com métricas de mediana
+        print(f"{'Método':<15} {'N_Exec':<6} {'Avg_Error':<12} {'HV_General':<12} {'Best_Sharpe':<15} {'Pareto_Mean':<12} {'Pareto_Median':<13}")
+        print("-" * 110)
         
         for _, row in df_inst.iterrows():
             metodo = row['Método'][:14]  # Truncar se muito longo
@@ -483,19 +501,189 @@ def print_summary_report(comparison_df):
             avg_error = row.get('Avg_Interp_Error', 'N/A')[:11]
             hv_general = row.get('HV_General', 'N/A')[:11]
             best_sharpe = row.get('Best_Sharpe', 'N/A')[:14]
-            pareto_interp = row.get('Pareto_Interp_Error', 'N/A')[:11]
-            best_interp = row.get('Best_Pareto_Interp_Error', 'N/A')[:11]
+            pareto_mean = row.get('Pareto_Interp_Mean', 'N/A')[:11]
+            pareto_median = row.get('Pareto_Interp_Median', 'N/A')[:12]
             
-            print(f"{metodo:<15} {n_exec:<6} {avg_error:<12} {hv_general:<12} {best_sharpe:<15} {pareto_interp:<12} {best_interp:<12}")
+            print(f"{metodo:<15} {n_exec:<6} {avg_error:<12} {hv_general:<12} {best_sharpe:<15} {pareto_mean:<12} {pareto_median:<13}")
     
     print("\n" + "="*80)
     print("📋 LEGENDA:")
     print("  • Avg_Error: Erro médio de interpolação (menor = melhor)")
     print("  • HV_General: Hipervolume geral (maior = melhor)")
     print("  • Best_Sharpe: Média/Máximo do Sharpe ratio (maior = melhor)")
-    print("  • Pareto_Interp: Erro de interpolação da fronteira de Pareto vs fronteira eficiente (menor = melhor)")
-    print("  • Best_Interp: Erro de interpolação do best Pareto vs fronteira eficiente (menor = melhor)")
+    print("  • Pareto_Mean: Erro MÉDIO de interpolação da fronteira de Pareto vs eficiente (menor = melhor)")
+    print("  • Pareto_Median: Erro MEDIANO de interpolação da fronteira de Pareto vs eficiente (menor = melhor)")
     print("="*80)
+
+def create_median_interpolation_plots(aggregated_stats, output_dir):
+    """
+    Cria gráficos comparativos das métricas de mediana de interpolação
+    
+    Args:
+        aggregated_stats: Estatísticas agregadas por instância e método
+        output_dir: Diretório onde salvar os gráficos
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
+        # Configurar estilo dos gráficos
+        plt.style.use('default')
+        sns.set_palette("husl")
+        
+        plots_dir = os.path.join(output_dir, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        for instancia, esquemas in aggregated_stats.items():
+            # Preparar dados para plotagem
+            methods = []
+            pareto_medians = []
+            pareto_median_stds = []
+            best_pareto_medians = []
+            best_pareto_median_stds = []
+            
+            for esquema, stats in esquemas.items():
+                methods.append(esquema)
+                
+                # Extrair métricas de mediana da fronteira de Pareto
+                if 'pareto_interp_median' in stats:
+                    pareto_median_data = stats['pareto_interp_median']
+                    pareto_medians.append(pareto_median_data.get('median', 0))
+                    pareto_median_stds.append(pareto_median_data.get('std', 0))
+                else:
+                    pareto_medians.append(0)
+                    pareto_median_stds.append(0)
+                
+                # Extrair métricas de mediana do best Pareto
+                if 'best_pareto_interp_median' in stats:
+                    best_median_data = stats['best_pareto_interp_median']
+                    best_pareto_medians.append(best_median_data.get('median', 0))
+                    best_pareto_median_stds.append(best_median_data.get('std', 0))
+                else:
+                    best_pareto_medians.append(0)
+                    best_pareto_median_stds.append(0)
+            
+            # Criar figura com subplots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+            fig.suptitle(f'Erro de Interpolação - Mediana vs Fronteira Eficiente\nInstância: {instancia}', 
+                        fontsize=16, fontweight='bold')
+            
+            # Gráfico 1: Mediana da Fronteira de Pareto
+            bars1 = ax1.bar(methods, pareto_medians, yerr=pareto_median_stds, 
+                           capsize=5, alpha=0.7, color='skyblue', edgecolor='navy')
+            ax1.set_title('Fronteira de Pareto vs Fronteira Eficiente\n(Erro Mediano)', fontweight='bold')
+            ax1.set_ylabel('Erro de Interpolação (Mediana)', fontweight='bold')
+            ax1.set_xlabel('Métodos de Inicialização', fontweight='bold')
+            ax1.tick_params(axis='x', rotation=45)
+            ax1.grid(True, alpha=0.3)
+            
+            # Adicionar valores nas barras
+            for i, (bar, value, std) in enumerate(zip(bars1, pareto_medians, pareto_median_stds)):
+                height = bar.get_height()
+                ax1.text(bar.get_x() + bar.get_width()/2., height + std + 0.001,
+                        f'{value:.4f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+            
+            # Gráfico 2: Mediana do Best Pareto
+            bars2 = ax2.bar(methods, best_pareto_medians, yerr=best_pareto_median_stds,
+                           capsize=5, alpha=0.7, color='lightcoral', edgecolor='darkred')
+            ax2.set_title('Best Pareto vs Fronteira Eficiente\n(Erro Mediano)', fontweight='bold')
+            ax2.set_ylabel('Erro de Interpolação (Mediana)', fontweight='bold')
+            ax2.set_xlabel('Métodos de Inicialização', fontweight='bold')
+            ax2.tick_params(axis='x', rotation=45)
+            ax2.grid(True, alpha=0.3)
+            
+            # Adicionar valores nas barras
+            for i, (bar, value, std) in enumerate(zip(bars2, best_pareto_medians, best_pareto_median_stds)):
+                height = bar.get_height()
+                ax2.text(bar.get_x() + bar.get_width()/2., height + std + 0.001,
+                        f'{value:.4f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+            
+            plt.tight_layout()
+            
+            # Salvar gráfico
+            plot_filename = os.path.join(plots_dir, f'median_interpolation_comparison_{instancia}.png')
+            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"📊 Gráfico de mediana salvo: {plot_filename}")
+            
+            # Criar gráfico comparativo combinado
+            fig, ax = plt.subplots(1, 1, figsize=(14, 8))
+            
+            x = np.arange(len(methods))
+            width = 0.35
+            
+            bars1 = ax.bar(x - width/2, pareto_medians, width, yerr=pareto_median_stds,
+                          label='Fronteira de Pareto', alpha=0.7, color='skyblue', 
+                          capsize=5, edgecolor='navy')
+            bars2 = ax.bar(x + width/2, best_pareto_medians, width, yerr=best_pareto_median_stds,
+                          label='Best Pareto', alpha=0.7, color='lightcoral',
+                          capsize=5, edgecolor='darkred')
+            
+            ax.set_title(f'Comparativo: Erro Mediano de Interpolação vs Fronteira Eficiente\nInstância: {instancia}',
+                        fontsize=16, fontweight='bold')
+            ax.set_ylabel('Erro de Interpolação (Mediana)', fontweight='bold')
+            ax.set_xlabel('Métodos de Inicialização', fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(methods, rotation=45, ha='right')
+            ax.legend(fontsize=12)
+            ax.grid(True, alpha=0.3)
+            
+            # Adicionar valores nas barras
+            for bars in [bars1, bars2]:
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height + 0.001,
+                           f'{height:.4f}', ha='center', va='bottom', fontsize=8)
+            
+            plt.tight_layout()
+            
+            # Salvar gráfico combinado
+            combined_filename = os.path.join(plots_dir, f'combined_median_comparison_{instancia}.png')
+            plt.savefig(combined_filename, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"📊 Gráfico combinado salvo: {combined_filename}")
+            
+            # Criar gráfico de ranking (ordenado por performance)
+            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+            
+            # Combinar dados e ordenar por menor erro mediano na fronteira de Pareto
+            combined_data = list(zip(methods, pareto_medians, pareto_median_stds))
+            combined_data.sort(key=lambda x: x[1])  # Ordenar por erro mediano
+            
+            sorted_methods, sorted_medians, sorted_stds = zip(*combined_data)
+            
+            bars = ax.barh(sorted_methods, sorted_medians, xerr=sorted_stds,
+                          alpha=0.7, color='lightgreen', capsize=5, edgecolor='darkgreen')
+            
+            ax.set_title(f'Ranking: Erro Mediano de Interpolação (Fronteira de Pareto)\nInstância: {instancia} - Ordenado por Performance',
+                        fontsize=14, fontweight='bold')
+            ax.set_xlabel('Erro de Interpolação (Mediana) - Menor é Melhor', fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='x')
+            
+            # Adicionar valores nas barras
+            for bar, value in zip(bars, sorted_medians):
+                width = bar.get_width()
+                ax.text(width + 0.001, bar.get_y() + bar.get_height()/2,
+                       f'{value:.4f}', ha='left', va='center', fontsize=10, fontweight='bold')
+            
+            plt.tight_layout()
+            
+            # Salvar ranking
+            ranking_filename = os.path.join(plots_dir, f'ranking_median_pareto_{instancia}.png')
+            plt.savefig(ranking_filename, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"📊 Ranking salvo: {ranking_filename}")
+        
+        print(f"\n✅ Todos os gráficos de mediana salvos em: {plots_dir}")
+        
+    except ImportError:
+        print("⚠️ matplotlib/seaborn não disponível. Gráficos não foram gerados.")
+        print("💡 Para gerar gráficos, instale: pip install matplotlib seaborn")
+    except Exception as e:
+        print(f"❌ Erro ao gerar gráficos: {e}")
 
 def main():
     """Função principal"""
@@ -628,17 +816,26 @@ Exemplos de uso:
     
     comparison_df = save_detailed_results(all_metrics, aggregated_stats, output_dir)
     
-    # 5. Imprimir relatório resumido
+    # 5. Criar gráficos de mediana (NOVO)
+    print("\n📊 Gerando gráficos de interpolação de mediana...")
+    create_median_interpolation_plots(aggregated_stats, output_dir)
+    
+    # 6. Imprimir relatório resumido
     print_summary_report(comparison_df)
     
     print("\n🎉 Análise concluída!")
     print(f"📁 Resultados salvos em: {os.path.abspath(output_dir)}")
     
-    # 6. Dicas adicionais
+    # 7. Dicas adicionais
     print("\n💡 PRÓXIMOS PASSOS:")
     print(f"   - Verifique a tabela: {output_dir}/comparison_table.csv")
     print(f"   - Dados detalhados: {output_dir}/aggregated_statistics.json")
     print(f"   - Dados brutos: {output_dir}/raw_metrics_data.json")
+    print(f"   - Gráficos de mediana: {output_dir}/plots/ (se matplotlib disponível)")
+    print("\n📊 GRÁFICOS GERADOS:")
+    print("   • median_interpolation_comparison_<instancia>.png - Comparação lado a lado")
+    print("   • combined_median_comparison_<instancia>.png - Gráfico combinado")
+    print("   • ranking_median_pareto_<instancia>.png - Ranking por performance")
 
 if __name__ == "__main__":
     main()
