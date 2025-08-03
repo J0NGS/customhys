@@ -435,11 +435,22 @@ class OptimizedPortfolioAnalyzer:
             for i in range(distances.shape[0]):
                 # Encontrar candidatos mais próximos
                 n_candidates = min(n_solutions_per_point * 2, len(df_logs))
-                closest_idx = np.argpartition(distances[i], n_candidates)[:n_candidates]
+                # Corrigir para evitar erro de índice - argpartition precisa de k < len(array)
+                current_distances = distances[i]
+                k = min(n_candidates, len(current_distances) - 1) if len(current_distances) > 1 else 0
+                if k > 0:
+                    closest_idx = np.argpartition(current_distances, k)[:n_candidates]
+                else:
+                    closest_idx = np.arange(len(current_distances))
                 
                 # Selecionar melhores por erro
                 candidate_errors = solutions_error[closest_idx]
-                best_idx = np.argpartition(candidate_errors, n_solutions_per_point)[:n_solutions_per_point]
+                # Aplicar a mesma correção para argpartition
+                k_error = min(n_solutions_per_point, len(candidate_errors) - 1) if len(candidate_errors) > 1 else 0
+                if k_error > 0:
+                    best_idx = np.argpartition(candidate_errors, k_error)[:n_solutions_per_point]
+                else:
+                    best_idx = np.arange(len(candidate_errors))
                 selected_for_point = closest_idx[best_idx]
                 
                 selected_indices_set.update(solutions_indices[selected_for_point])

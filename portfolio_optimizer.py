@@ -23,12 +23,17 @@ def main():
     parser.add_argument('config_file', help='Arquivo de configuração da hyper-heurística')
     parser.add_argument('frontier_file', nargs='?', default=None, 
                         help='Arquivo da fronteira eficiente (opcional)')
+    parser.add_argument('lambda_param', nargs='?', type=float, default=0.5,
+                        help='Parâmetro lambda para trade-off risco-retorno (padrão: 0.5)')
     args = parser.parse_args()
 
     # Carregamento de dados e configurações
     instance_data = read_or_library_instance(args.instance_file)
     k = None if args.cardinality == 0 else args.cardinality
     hh_config = load_hh_config(args.config_file)
+    lambda_param = args.lambda_param
+    
+    print(f"📊 Parâmetro lambda configurado: {lambda_param}")
     
     # Validar arquivo da fronteira eficiente se fornecido
     if args.frontier_file and not os.path.exists(args.frontier_file):
@@ -45,12 +50,11 @@ def main():
     print(f"📁 Diretório de saída: {output_dir}")
     
     log_file_path = os.path.join(output_dir, "execution_logs.csv")
-    from portfolio_utils.milestone_logger import MilestoneLogger
-    logger = MilestoneLogger(log_file_path=log_file_path, initial_interval=1)
+    logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=100000)
 
     # Configuração do problema para a HH
-    print(f"\n⚙️  Configurando problema...")
-    problem_config = configure_problem(instance_data, k=k, risk_free_rate=0.03, lambda_= 0.5)
+    print("\n⚙️  Configurando problema...")
+    problem_config = configure_problem(instance_data, k=k, risk_free_rate=0.03, lambda_=lambda_param)
 
     evaluation_func_with_logger = partial(
         portfolio_evaluation, 
@@ -58,7 +62,7 @@ def main():
         k=k, 
         risk_free_rate=0.03,
         logger=logger,
-        lambda_=0.5,
+        lambda_=lambda_param,
     )
     
     problem_config["function"] = lambda weights: evaluation_func_with_logger(weights)[0]

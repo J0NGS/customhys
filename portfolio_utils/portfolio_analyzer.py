@@ -303,8 +303,13 @@ def _process_frontier_batch_parallel(batch_data):
         return_diff = solutions_return - batch_frontier_return[i]
         distances = np.sqrt(risk_diff**2 + return_diff**2)
         
-        # Encontrar candidatos mais próximos
-        closest_candidates_idx = np.argpartition(distances, n_candidates)[:n_candidates]
+        # Encontrar candidatos mais próximos - corrigir para evitar erro de índice
+        # argpartition precisa de k < len(array)
+        k = min(n_candidates, len(distances) - 1) if len(distances) > 1 else 0
+        if k > 0:
+            closest_candidates_idx = np.argpartition(distances, k)[:n_candidates]
+        else:
+            closest_candidates_idx = np.arange(len(distances))
         
         # Entre os candidatos próximos, pegar os com menor erro
         candidate_errors = solutions_error[closest_candidates_idx]
@@ -469,7 +474,12 @@ def get_best_solutions_per_frontier_point(df_logs, frontier_points, n_solutions_
         for batch_idx in range(len(batch_frontier_risk)):
             # Encontrar os candidatos mais próximos para este ponto da fronteira
             frontier_distances = distances_matrix_batch[batch_idx, :]
-            closest_candidates_idx = np.argpartition(frontier_distances, n_candidates)[:n_candidates]
+            # Corrigir para evitar erro de índice - argpartition precisa de k < len(array)
+            k = min(n_candidates, len(frontier_distances) - 1) if len(frontier_distances) > 1 else 0
+            if k > 0:
+                closest_candidates_idx = np.argpartition(frontier_distances, k)[:n_candidates]
+            else:
+                closest_candidates_idx = np.arange(len(frontier_distances))
             
             # Entre os candidatos próximos, pegar os com menor erro
             candidate_errors = solutions_error[closest_candidates_idx]
