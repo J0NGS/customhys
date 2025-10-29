@@ -18,11 +18,12 @@ def _repair_weights(weights, epsilon, delta, k, n):
     if len(delta) != n:
         raise ValueError(f"Array delta deve ter tamanho {n}, mas tem tamanho {len(delta)}")
     
-    # Verificar se k é válido
+    # Verificar se k é válido APENAS se há restrição de cardinalidade  
     if k > n:
         raise ValueError(f"k ({k}) não pode ser maior que n_assets ({n})")
-    if k <= 0:
-        raise ValueError(f"k ({k}) deve ser positivo")
+    # Só verifica k <= 0 se k foi especificado (não é None)
+    if k is not None and k <= 0:
+        raise ValueError(f"k ({k}) deve ser positivo quando especificado")
         
     # Verificar se epsilon <= delta para todos os ativos
     if np.any(epsilon > delta):
@@ -122,15 +123,13 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
     if np.any(epsilon > delta):
         return 1e7, {"error": "epsilon deve ser menor ou igual a delta para todos os ativos"}
     
-    is_constrained = k is not None and k < n
+    is_constrained = k is not None and (k < n and k > 0)
     if not is_constrained:
         k = n
     
-    # Validar k
+    # Validar k - só verifica se positivo quando há restrição 
     if k > n:
         return 1e7, {"error": f"k ({k}) não pode ser maior que n_assets ({n})"}
-    if k <= 0:
-        return 1e7, {"error": f"k ({k}) deve ser positivo"}
     
     try:
         final_weights, _, infeasible = _repair_weights(weights, epsilon, delta, k, n)
@@ -178,11 +177,10 @@ def configure_problem(instance_data, k=None, risk_free_rate=0.03, lambda_= 0.5):
     if k is not None and k > n:
         raise ValueError(f"k ({k}) não pode ser maior que n_assets ({n})")
     if k is not None and k <= 0:
-        raise ValueError(f"k ({k}) deve ser positivo")
+        raise ValueError(f"k ({k}) deve ser positivo quando especificado (use k=None para sem restrição)")
     
     return {
-        "function": lambda weights: portfolio_evaluation(weights, instance_data, lambda_=lambda_, k=k, risk_free_rate=risk_free_rate, epsilon=epsilon, delta=delta
-                                                         )[0],
+        "function": lambda weights: portfolio_evaluation(weights, instance_data, lambda_=lambda_, k=k, risk_free_rate=risk_free_rate, epsilon=epsilon, delta=delta)[0],
         "is_constrained": True,
         "boundaries": (lower_bounds, upper_bounds),
     }

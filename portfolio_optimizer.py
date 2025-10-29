@@ -8,6 +8,7 @@ import sys
 import argparse
 import pandas as pd
 from functools import partial
+import shutil
 
 from customhys.hyperheuristic import Hyperheuristic
 from portfolio_utils.instance_reader import read_or_library_instance
@@ -25,6 +26,10 @@ def main():
                         help='Arquivo da fronteira eficiente (opcional)')
     parser.add_argument('lambda_param', nargs='?', type=float, default=0.5,
                         help='Parâmetro lambda para trade-off risco-retorno (padrão: 0.5)')
+    parser.add_argument('--no-logger', action='store_true', default=False,
+                        help='Desabilita a criação do logger (logs em execution_logs.csv)')
+    parser.add_argument('--no-analysis', action='store_true', default=False,
+                        help='Pula a análise avançada (analyze_portfolio_results)')
     args = parser.parse_args()
 
     # Carregamento de dados e configurações
@@ -50,7 +55,11 @@ def main():
     print(f"📁 Diretório de saída: {output_dir}")
     
     log_file_path = os.path.join(output_dir, "execution_logs.csv")
-    logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=100000)
+    if args.no_logger:
+        logger = None
+        print("🔕 Logger desabilitado por parâmetro CLI (--no-logger).")
+    else:
+        logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=100000)
 
     # Configuração do problema para a HH
     print("\n⚙️  Configurando problema...")
@@ -82,16 +91,27 @@ def main():
         # Apenas executamos. Vamos ignorar o que hh.solve() retorna.
         result_from_hh = hh.solve()
         print(f"✅ Execução concluída!")
-        print(f"📁 Data files da HH salvos em: data_files/raw/{output_dir}/")
-        
+        # Copiar quaisquer arquivos gerados pela HH em data_files/raw/<file_label> para o diretório de saída
+        raw_dd = os.path.join('data_files', 'raw', str(output_dir))
+        dest_raw = os.path.join(output_dir, 'data_files_raw')
+        try:
+            if os.path.exists(raw_dd):
+                shutil.copytree(raw_dd, dest_raw, dirs_exist_ok=True)
+                print(f"📁 Data files da HH copiados para: {dest_raw}")
+            else:
+                print(f"ℹ️ Nenhum data_files/raw/{output_dir} encontrado para copiar.")
+        except Exception as e:
+            print(f"⚠️ Falha ao copiar data_files/raw: {e}")
     except Exception as e:
         print(f"❌ Erro durante execução: {e}")
         result_from_hh = {"error": str(e)}
-        
     finally:
         print("\n💾 Salvando logs restantes...")
-        logger.close()
-        print("✅ Logs restantes salvos.")
+        if logger is not None:
+            logger.close()
+            print("✅ Logs restantes salvos.")
+        else:
+            print("ℹ️ Logger estava desabilitado; nada a fechar.")
 
     # --- ANÁLISE E SALVAMENTO A PARTIR DO ARQUIVO DE LOG ---
     print(f"\n💾 Analisando e salvando resultados...")
@@ -120,8 +140,8 @@ def main():
         # 3. Chamar a função save_logs com os dados corretos
         # Passamos a lista de logs lida do arquivo para gerar as estatísticas
         save_logs(output_dir, all_logs_from_file, instance_data, hh_config, result_from_hh)
-        
-        print(f"✅ Resultados salvos em: {output_dir}")
+
+        print(f" Resultados salvos em: {output_dir}")
         print(f"   - execution_logs.csv: Log de todas as avaliações")
         print(f"   - hh_config.json: Configuração da hyper-heurística")
         print(f"   - instance_data.json: Dados da instância")
@@ -133,8 +153,11 @@ def main():
     
     # --- ANÁLISE AVANÇADA DOS RESULTADOS ---
     try:
-        print("\n📊 Iniciando análise avançada dos resultados...")
-        analyze_portfolio_results(output_dir, args.frontier_file)
+        if args.no_analysis:
+            print("\n🔕 Análise avançada desabilitada por parâmetro CLI (--no-analysis). Pulando analyze_portfolio_results.")
+        else:
+            print("\n📊 Iniciando análise avançada dos resultados...")
+            analyze_portfolio_results(output_dir, args.frontier_file)
     except Exception as e:
         print(f"❌ Erro durante análise avançada: {e}")
         

@@ -12,6 +12,7 @@ import numpy as np
 from functools import partial
 import time
 from datetime import datetime
+import shutil
 
 from customhys.hyperheuristic import Hyperheuristic
 from portfolio_utils.instance_reader import read_or_library_instance
@@ -29,6 +30,10 @@ def main():
                         help='Arquivo da fronteira eficiente (opcional)')
     parser.add_argument('lambda_intervals', type=int, 
                         help='Número de intervalos de lambda entre 0 e 1 (ex: 50)')
+    parser.add_argument('--no-logger', action='store_true', default=False,
+                        help='Desabilita a criação do logger (logs em execution_logs.csv)')
+    parser.add_argument('--no-analysis', action='store_true', default=False,
+                        help='Pula a análise avançada (analyze_portfolio_results)')
     args = parser.parse_args()
 
     # Carregamento de dados e configurações
@@ -80,22 +85,40 @@ def main():
         try:
             # Configuração do Logger
             log_file_path = os.path.join(sub_output_dir, "execution_logs.csv")
-            logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=100000)
+            if args.no_logger:
+                logger = None
+                print("🔕 Logger desabilitado por parâmetro CLI (--no-logger) para esta execução.")
+            else:
+                logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=100000)
 
             # Configuração do problema para a HH
             print("⚙️  Configurando problema...")
             problem_config = configure_problem(instance_data, k=k, risk_free_rate=0.03, lambda_=lambda_param)
 
-            evaluation_func_with_logger = partial(
-                portfolio_evaluation, 
-                instance_data=instance_data, 
-                k=k, 
-                risk_free_rate=0.03,
-                logger=logger,
-                lambda_=lambda_param,
-                epsilon=0.01,  # Valor padrão de epsilon
-                delta=1.0
-            )
+            # Ajustar epsilon/delta baseado na cardinalidade e número de ativos
+            if k is None:  # Sem restrição de cardinalidade
+                # Para portfolios sem restrição, não usar epsilon/delta fixos
+                evaluation_func_with_logger = partial(
+                    portfolio_evaluation, 
+                    instance_data=instance_data, 
+                    k=k, 
+                    risk_free_rate=0.03,
+                    logger=logger,
+                    lambda_=lambda_param,
+                    # SEM epsilon e delta para evitar problemas numéricos
+                )
+            else:
+                # Para portfolios com restrição, usar epsilon/delta
+                evaluation_func_with_logger = partial(
+                    portfolio_evaluation, 
+                    instance_data=instance_data, 
+                    k=k, 
+                    risk_free_rate=0.03,
+                    logger=logger,
+                    lambda_=lambda_param,
+                    epsilon=0.01,  # Valor padrão de epsilon
+                    delta=1.0
+                )
             
             problem_config["function"] = lambda weights: evaluation_func_with_logger(weights)[0]
             print("✅ Problema configurado!")
@@ -115,6 +138,17 @@ def main():
             execution_time = time.time() - execution_start
             
             print(f"✅ Execução concluída em {execution_time:.1f}s!")
+            # Copiar quaisquer arquivos gerados pela HH em data_files/raw/<file_label> para o sub_output_dir
+            raw_dd = os.path.join('data_files', 'raw', f"lambda_{lambda_param:.4f}")
+            dest_raw = os.path.join(sub_output_dir, 'data_files_raw')
+            try:
+                if os.path.exists(raw_dd):
+                    shutil.copytree(raw_dd, dest_raw, dirs_exist_ok=True)
+                    print(f"📁 Data files da HH copiados para: {dest_raw}")
+                else:
+                    print(f"ℹ️ Nenhum data_files/raw/lambda_{lambda_param:.4f} encontrado para copiar.")
+            except Exception as e:
+                print(f"⚠️ Falha ao copiar data_files/raw: {e}")
             
         except Exception as e:
             print(f"❌ Erro durante execução: {e}")
@@ -123,8 +157,11 @@ def main():
             
         finally:
             print("💾 Salvando logs...")
-            logger.close()
-            print("✅ Logs salvos.")
+            if logger is not None:
+                logger.close()
+                print("✅ Logs salvos.")
+            else:
+                print("ℹ️ Logger estava desabilitado; nada a fechar.")
 
         # Análise e salvamento dos resultados
         try:
@@ -164,13 +201,16 @@ def main():
             save_logs(sub_output_dir, all_logs_from_file, instance_data, hh_config, result_from_hh)
             
             # Análise avançada (opcional, pode ser demorada)
-            if args.frontier_file and len(all_logs_from_file) > 10:  # Só se houver dados suficientes
-                try:
-                    print("📊 Iniciando análise avançada...")
-                    analyze_portfolio_results(sub_output_dir, args.frontier_file)
-                    print("✅ Análise avançada concluída!")
-                except Exception as e:
-                    print(f"⚠️ Erro na análise avançada: {e}")
+            if args.no_analysis:
+                print("🔕 Análise avançada desabilitada por parâmetro CLI (--no-analysis). Pulando analyze_portfolio_results.")
+            else:
+                if args.frontier_file and len(all_logs_from_file) > 10:  # Só se houver dados suficientes
+                    try:
+                        print("📊 Iniciando análise avançada...")
+                        analyze_portfolio_results(sub_output_dir, args.frontier_file)
+                        print("✅ Análise avançada concluída!")
+                    except Exception as e:
+                        print(f"⚠️ Erro na análise avançada: {e}")
 
         except Exception as e:
             print(f"❌ Erro ao processar resultados: {e}")
