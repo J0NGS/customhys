@@ -445,12 +445,19 @@ def merge_json(data_folder: str, list_of_fields: list = None, save_file: bool = 
 
 class NumpyEncoder(json.JSONEncoder):
     """
-    Numpy encoder
+    Numpy encoder - converte arrays e tipos escalares numpy pra tipos nativos python
     """
 
     def default(self, obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
+        # converte tipos escalares numpy (int64, float64, etc) pra tipos python nativos
+        elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
         return json.JSONEncoder.default(self, obj)
 
 

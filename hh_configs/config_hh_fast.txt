@@ -1,12 +1,12 @@
 {
     "cardinality": 10,
     "cardinality_min": 1,
-    "num_iterations": 30,
-    "num_agents": 5,
+    "num_iterations": 20,
+    "num_agents": 2,
     "as_mh": true,
     "allow_weight_matrix": true,
     "num_replicas": 5,
-    "num_steps": 25,
+    "num_steps": 15,
     "stagnation_percentage": 0.40,
     "max_temperature": 1,
     "min_temperature": 1e-6,
@@ -18,5 +18,5 @@
     "verbose": true,
     "learning_portion": 0.3,
     "solver": "static",
-    "initial_scheme": "sobol"
+    "initial_scheme": "random"
 }

@@ -1,7 +1,7 @@
 {
-    "cardinality": 10,
+    "cardinality": 5,
     "cardinality_min": 1,
-    "num_iterations": 30,
+    "num_iterations": 100,
     "num_agents": 5,
     "as_mh": true,
     "allow_weight_matrix": true,

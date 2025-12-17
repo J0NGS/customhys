@@ -5,10 +5,10 @@ import pandas as pd
 from datetime import datetime
 
 def _repair_weights(weights, epsilon, delta, k, n):
-    # Validações de entrada
-    weights = np.array(weights)
-    epsilon = np.array(epsilon)
-    delta = np.array(delta)
+    # usando asarray pra evitar copia desnecessaria se ja for numpy array
+    weights = np.asarray(weights)
+    epsilon = np.asarray(epsilon)
+    delta = np.asarray(delta)
     
     # Verificar se os arrays têm o tamanho correto
     if len(weights) != n:
@@ -35,7 +35,8 @@ def _repair_weights(weights, epsilon, delta, k, n):
     if np.sum(selected_epsilon) > 1.0:
         return None, selected_indices, True
     final_k_weights = selected_epsilon.copy()
-    free_assets_map = list(range(k))
+    # usando set pra operacoes O(1) ao inves de list O(k)
+    free_assets_map = set(range(k))
     
     # Proteção contra loop infinito
     max_iterations = 1000
@@ -54,26 +55,28 @@ def _repair_weights(weights, epsilon, delta, k, n):
         if not free_assets_map:
             break
             
-        s_i_free = weights[selected_indices[free_assets_map]]
+        # converte set pra lista so quando necessario pra indexacao numpy
+        free_list = list(free_assets_map)
+        s_i_free = weights[selected_indices[free_list]]
         sum_s_i_free = np.sum(s_i_free)
         if sum_s_i_free > 1e-9:
             distribution = free_capital * (s_i_free / sum_s_i_free)
-            final_k_weights[free_assets_map] += distribution
+            final_k_weights[free_list] += distribution
         violating_assets_map = [idx for idx in free_assets_map if final_k_weights[idx] > selected_delta[idx]]
         if not violating_assets_map:
             break
         else:
             for idx in violating_assets_map:
                 final_k_weights[idx] = selected_delta[idx]
-                free_assets_map.remove(idx)
+                free_assets_map.discard(idx)  # O(1) com set, era O(k) com list
     final_weights = np.zeros(n)
     final_weights[selected_indices] = final_k_weights
     return final_weights, selected_indices, False
 
 def _calc_metrics(final_weights, returns, cov, lambda_, risk_free_rate):
-    # (Esta função permanece inalterada)
     expected_return = np.dot(final_weights, returns)
-    variance = np.dot(final_weights, np.dot(cov, final_weights))
+    # forma quadratica otimizada: evita array temporario intermediario
+    variance = final_weights @ cov @ final_weights
     objective = lambda_ * variance - (1 - lambda_) * expected_return
     risk = np.sqrt(variance)
     sharpe = (expected_return - risk_free_rate) / risk if risk > 0 else -1e6
@@ -101,27 +104,17 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
     if delta is None:
         delta = instance_data.get("delta", np.ones(n))
     
-    # Converter para arrays numpy e validar tamanhos
-    epsilon = np.array(epsilon)
-    delta = np.array(delta)
+    # converte pra array (asarray nao copia se ja for array)
+    epsilon = np.asarray(epsilon)
+    delta = np.asarray(delta)
     
-    if len(epsilon) != n:
-        return 1e7, {"error": f"Array epsilon deve ter tamanho {n}, mas tem tamanho {len(epsilon)}"}
-    if len(delta) != n:
-        return 1e7, {"error": f"Array delta deve ter tamanho {n}, mas tem tamanho {len(delta)}"}
+    # validacoes de epsilon/delta removidas - ja foram validadas no configure_problem
+    # só valida weights que muda a cada avaliacao
+    if np.any(np.isnan(weights)):
+        return 1e7, {"error": "valores NaN detectados em weights"}
     
-    # Validar valores
-    if np.any(np.isnan(epsilon)) or np.any(np.isnan(delta)) or np.any(np.isnan(weights)):
-        return 1e7, {"error": "Valores NaN detectados em epsilon, delta ou weights"}
-    
-    if np.any(np.isinf(epsilon)) or np.any(np.isinf(delta)) or np.any(np.isinf(weights)):
-        return 1e7, {"error": "Valores infinitos detectados em epsilon, delta ou weights"}
-    
-    if np.any(epsilon < 0) or np.any(delta < 0):
-        return 1e7, {"error": "epsilon e delta devem ser não-negativos"}
-    
-    if np.any(epsilon > delta):
-        return 1e7, {"error": "epsilon deve ser menor ou igual a delta para todos os ativos"}
+    if np.any(np.isinf(weights)):
+        return 1e7, {"error": "valores infinitos detectados em weights"}
     
     is_constrained = k is not None and (k < n and k > 0)
     if not is_constrained:

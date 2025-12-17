@@ -6,6 +6,7 @@ Portfolio Optimization usando CustomHyS
 import os
 import sys
 import argparse
+import time
 import pandas as pd
 from functools import partial
 import shutil
@@ -31,43 +32,51 @@ def main():
     parser.add_argument('--no-analysis', action='store_true', default=False,
                         help='Pula a análise avançada (analyze_portfolio_results)')
     args = parser.parse_args()
+    # ------------------ LEITURA E INSTANCIAMENTO DOS ARGUMENTOS PASSADOS -----------------------
+    # carregamento de dados e configurações
+    instance_data = read_or_library_instance(args.instance_file)    # instância do problema
+    k = None if args.cardinality == 0 else args.cardinality         # cardinalidade da solução (quantidade máximas de ações selecionadas, 0 = sem restrição)
+    hh_config = load_hh_config(args.config_file)                    # carregando configuração da hiper-heurística
+    lambda_param = args.lambda_param                                # argumento lambda(função objetivo Chang et al (2000x))
+    print("------------------- Parâmetros Configurados -----------------------")
+    print("[INFO] Parâmetro configurados:")
+    print ("- Instância: {}".format(args.instance_file))
+    print ("- Cardinalidade: {}".format("Sem restrição" if k is None else k))
+    print ("- Configuração HH: {}".format(args.config_file))
+    print ("- Lambda: {:.2f}".format(lambda_param))
+    time.sleep(1.5)
+    print("-------------------------------------------------------------------")
 
-    # Carregamento de dados e configurações
-    instance_data = read_or_library_instance(args.instance_file)
-    k = None if args.cardinality == 0 else args.cardinality
-    hh_config = load_hh_config(args.config_file)
-    lambda_param = args.lambda_param
+    # ------------------ VALIDAÇÕES INICIAIS DOS ARQUIVOS -----------------------
     
-    print(f"📊 Parâmetro lambda configurado: {lambda_param}")
-    
-    # Validar arquivo da fronteira eficiente se fornecido
+    # validar arquivo da fronteira eficiente fornecido
     if args.frontier_file and not os.path.exists(args.frontier_file):
-        print(f"⚠️ Arquivo da fronteira eficiente não encontrado: {args.frontier_file}")
+        print(f"[WARNING] Arquivo da fronteira eficiente não encontrado: {args.frontier_file}")
         print("   A análise será executada sem a fronteira eficiente.")
         args.frontier_file = None
     elif args.frontier_file:
-        print(f"✅ Arquivo da fronteira eficiente encontrado: {args.frontier_file}")
+        print(f"[INFO] Arquivo da fronteira eficiente encontrado: {args.frontier_file}")
     else:
-        print("ℹ️ Nenhum arquivo de fronteira eficiente fornecido.")
+        print("[INFO] Nenhum arquivo de fronteira eficiente fornecido.")
     
-    # Configuração do Logger
+    # configuração do Logger
     output_dir = create_output_directory(args.instance_file, hh_config.get('initial_scheme', 'unknown'))
-    print(f"📁 Diretório de saída: {output_dir}")
+    print(f"[INFO] Diretório de saída: {output_dir}")
     
     log_file_path = os.path.join(output_dir, "execution_logs.csv")
     if args.no_logger:
         logger = None
-        print("🔕 Logger desabilitado por parâmetro CLI (--no-logger).")
+        print("[INFO] Logger desabilitado por parâmetro CLI (--no-logger).")
     else:
         logger = PortfolioLogger(log_file_path=log_file_path, buffer_size=100000)
 
-    # Configuração do problema para a HH
-    print("\n⚙️  Configurando problema...")
+    # configuração do problema para a HH
+    print("\n[PROCESS] Configurando problema...")
     problem_config = configure_problem(instance_data, k=k, risk_free_rate=0.03, lambda_=lambda_param)
 
     evaluation_func_with_logger = partial(
         portfolio_evaluation, 
-        instance_data=instance_data, 
+        instance_data=instance_data,
         k=k, 
         risk_free_rate=0.03,
         logger=logger,
@@ -75,55 +84,54 @@ def main():
     )
     
     problem_config["function"] = lambda weights: evaluation_func_with_logger(weights)[0]
-    print("✅ Problema configurado!")
+    print("[INFO] Problema configurado!")
 
-    # --- EXECUÇÃO SIMPLIFICADA ---
-    print(f"\n🚀 Iniciando execução da Hyper-Heurística...")
+    # --- EXECUÇÃO  ---
+    print(f"\n[PROCESS] Iniciando execução da Hyper-Heurística...")
     result_from_hh = None
     try:
-        # Usar o mesmo nome do output_dir como file_label para a HH
+        # mesmo nome do output_dir como file_label para a HH
         hh = Hyperheuristic(
             heuristic_space='default_portfolio.txt', 
             problem=problem_config, 
             parameters=hh_config,
-            file_label=output_dir  # Mesmo identificador do diretório de saída
+            file_label=output_dir  # mesmo nomr do output
         )
-        # Apenas executamos. Vamos ignorar o que hh.solve() retorna.
         result_from_hh = hh.solve()
-        print(f"✅ Execução concluída!")
-        # Copiar quaisquer arquivos gerados pela HH em data_files/raw/<file_label> para o diretório de saída
+        print(f"[INFO] Execução concluída!")
+        # copiar arquivos gerados pela HH em data_files/raw/<file_label> para o output
         raw_dd = os.path.join('data_files', 'raw', str(output_dir))
         dest_raw = os.path.join(output_dir, 'data_files_raw')
         try:
             if os.path.exists(raw_dd):
                 shutil.copytree(raw_dd, dest_raw, dirs_exist_ok=True)
-                print(f"📁 Data files da HH copiados para: {dest_raw}")
+                print(f"[INFO] Data files da HH copiados para: {dest_raw}")
             else:
-                print(f"ℹ️ Nenhum data_files/raw/{output_dir} encontrado para copiar.")
+                print(f"[INFO] Nenhum data_files/raw/{output_dir} encontrado para copiar.")
         except Exception as e:
-            print(f"⚠️ Falha ao copiar data_files/raw: {e}")
+            print(f"[WARNING] Falha ao copiar data_files/raw: {e}")
     except Exception as e:
-        print(f"❌ Erro durante execução: {e}")
+        print(f"[ERROR] Erro durante execução: {e}")
         result_from_hh = {"error": str(e)}
     finally:
-        print("\n💾 Salvando logs restantes...")
+        print("\n[PROCESS] Salvando logs restantes...")
         if logger is not None:
             logger.close()
-            print("✅ Logs restantes salvos.")
+            print("[INFO] Logs restantes salvos.")
         else:
-            print("ℹ️ Logger estava desabilitado; nada a fechar.")
+            print("[INFO] Logger estava desabilitado; nada a fechar.")
 
-    # --- ANÁLISE E SALVAMENTO A PARTIR DO ARQUIVO DE LOG ---
-    print(f"\n💾 Analisando e salvando resultados...")
+    # --- ANALISE E SALVAMENTO A PARTIR DO ARQUIVO DE LOG ---
+    print(f"\n[PROCESS] Analisando e salvando resultados...")
     try:
-        # 1. Ler o arquivo CSV que foi gerado
+        # 1. ler o arquivo CSV que foi gerado
         all_logs_from_file = []
         if os.path.exists(log_file_path):
             df = pd.read_csv(log_file_path)
-            # Converte o DataFrame de volta para uma lista de dicionários, igual ao 'execution_logs' original
+            # converte o DataFrame de volta para uma lista de dicionários, igual ao 'execution_logs' original
             all_logs_from_file = df.to_dict('records')
 
-        # 2. Aplicar a sua lógica original para encontrar a melhor solução
+        # 2. encontrar a melhor solução
         if all_logs_from_file:
             print(f"   - Total de avaliações: {len(all_logs_from_file)}")
             best_solution = min(all_logs_from_file, key=lambda x: x.get('objective', float('inf')))
@@ -137,8 +145,8 @@ def main():
         else:
             print("   - Nenhum log de execução encontrado para analisar.")
         
-        # 3. Chamar a função save_logs com os dados corretos
-        # Passamos a lista de logs lida do arquivo para gerar as estatísticas
+        # 3. chamar a função save_logs com os dados corretos
+        # passamos a lista de logs lida do arquivo para gerar as estatísticas
         save_logs(output_dir, all_logs_from_file, instance_data, hh_config, result_from_hh)
 
         print(f" Resultados salvos em: {output_dir}")
@@ -149,19 +157,19 @@ def main():
         print(f"   - summary_stats.json: Estatísticas resumidas")
 
     except Exception as e:
-        print(f"❌ Erro ao salvar ou analisar resultados: {e}")
+        print(f"[ERROR] Erro ao salvar ou analisar resultados: {e}")
     
-    # --- ANÁLISE AVANÇADA DOS RESULTADOS ---
+    # --- ANALISE AVANÇADA DOS RESULTADOS ---
     try:
         if args.no_analysis:
-            print("\n🔕 Análise avançada desabilitada por parâmetro CLI (--no-analysis). Pulando analyze_portfolio_results.")
+            print("\n[INFO] Análise avançada desabilitada por parâmetro CLI (--no-analysis). Pulando analyze_portfolio_results.")
         else:
-            print("\n📊 Iniciando análise avançada dos resultados...")
+            print("\n[PROCESS] Iniciando análise avançada dos resultados...")
             analyze_portfolio_results(output_dir, args.frontier_file)
     except Exception as e:
-        print(f"❌ Erro durante análise avançada: {e}")
+        print(f"[ERROR] Erro durante análise avançada: {e}")
         
-    print(f"\n🎉 Execução finalizada!")
+    print(f"\n[INFO] Execução finalizada!")
 
 if __name__ == "__main__":
     main()

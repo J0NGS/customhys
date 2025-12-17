@@ -7,6 +7,8 @@ Calcula métricas de performance, fronteiras de Pareto e gera visualizações.
 import os
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Backend não-interativo, evita problemas com tkinter em multiprocessing
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import warnings
@@ -40,7 +42,7 @@ def calculate_pareto_frontier_parallel(df_logs, n_processes=None):
     if n_solutions < 10000:
         return calculate_pareto_frontier(df_logs)
     
-    print(f"🚀 Calculando fronteira de Pareto com paralelização para {n_solutions} soluções")
+    print(f"[INFO] Calculando fronteira de Pareto com paralelização para {n_solutions} soluções")
     
     if n_processes is None:
         n_processes = min(cpu_count(), 6)  # Limite para evitar overhead
@@ -55,7 +57,7 @@ def calculate_pareto_frontier_parallel(df_logs, n_processes=None):
         end_idx = min(i + chunk_size, n_solutions)
         chunks.append((solutions[i:end_idx], indices[i:end_idx], i))
     
-    print(f"🔄 Processando {len(chunks)} chunks em {n_processes} processos")
+    print(f"[INFO] Processando {len(chunks)} chunks em {n_processes} processos")
     
     try:
         with Pool(processes=n_processes) as pool:
@@ -74,12 +76,12 @@ def calculate_pareto_frontier_parallel(df_logs, n_processes=None):
             final_pareto = df_logs.loc[all_pareto_indices]
             final_pareto = calculate_pareto_frontier(final_pareto)
         
-        print(f"✅ Fronteira de Pareto calculada: {len(final_pareto)} pontos")
+        print(f"[INFO] Fronteira de Pareto calculada: {len(final_pareto)} pontos")
         return final_pareto
         
     except Exception as e:
-        print(f"⚠️ Erro no cálculo paralelo de Pareto: {e}")
-        print("🔄 Fallback para método sequencial...")
+        print(f"[WARNING] Erro no cálculo paralelo de Pareto: {e}")
+        print("[INFO] Fallback para método sequencial...")
         return calculate_pareto_frontier(df_logs)
 
 def _find_pareto_in_chunk(chunk_data):
@@ -118,7 +120,6 @@ def calculate_pareto_frontier(df_logs):
     pareto_indices = []
     min_risk_so_far = float('inf')
     
-    # Algoritmo otimizado O(n log n) em vez de O(n²)
     for idx in sorted_indices:
         current_risk = solutions[idx, 1]
         if current_risk < min_risk_so_far:
@@ -170,7 +171,7 @@ def calculate_igd_plus_parallel(pareto_front, reference_front, n_processes=None)
         return np.mean(all_min_distances)
         
     except Exception as e:
-        print(f"⚠️ Erro no cálculo paralelo de IGD+: {e}")
+        print(f"⚠️22 Erro no cálculo paralelo de IGD+: {e}")
         return calculate_igd_plus(pareto_front, reference_front)
 
 def _calculate_igd_chunk(chunk_data):
@@ -852,21 +853,21 @@ def _load_and_validate_data(output_dir, efficient_frontier_file):
     # Carregar logs
     logs_path = os.path.join(output_dir, "execution_logs.csv")
     if not os.path.exists(logs_path):
-        raise FileNotFoundError(f"Arquivo execution_logs.csv não encontrado em {output_dir}")
+        raise FileNotFoundError(f"[ERROR] Arquivo execution_logs.csv não encontrado em {output_dir}")
     
     df_logs = pd.read_csv(logs_path)
-    print(f"✅ Carregados {len(df_logs)} logs de execução")
+    print(f"[INFO] Carregados {len(df_logs)} logs de execução")
     
     # Carregar fronteira eficiente (opcional)
     efficient_frontier = None
     if efficient_frontier_file and os.path.exists(efficient_frontier_file):
         efficient_frontier = load_efficient_frontier(efficient_frontier_file)
         if efficient_frontier is not None:
-            print(f"✅ Carregada fronteira eficiente com {len(efficient_frontier)} pontos")
+            print(f"[INFO] Carregada fronteira eficiente com {len(efficient_frontier)} pontos")
         else:
-            print("⚠️ Falha ao carregar fronteira eficiente")
+            print("[WARNING] Falha ao carregar fronteira eficiente")
     else:
-        print("ℹ️ Fronteira eficiente não fornecida ou não encontrada")
+        print("[INFO] Fronteira eficiente não fornecida ou não encontrada")
     
     return df_logs, efficient_frontier
 
@@ -958,28 +959,28 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
         use_parallel: Se True, usa processamento paralelo para acelerar cálculos (padrão: True)
         n_processes: Número de processos paralelos (None = auto)
     """
-    print(f"\n📊 Iniciando análise de dados para: {output_dir}")
+    print(f"\n Iniciando análise de dados para: {output_dir}")
     
     if use_parallel:
         if n_processes is None:
             n_processes = min(cpu_count(), 8)
-        print(f"🚀 Modo paralelo ativado com {n_processes} processos")
+        print(f"[INFO] Modo paralelo ativado com {n_processes} processos")
     else:
-        print("🐌 Modo sequencial ativado")
+        print("[INFO] Modo sequencial ativado")
     
     start_time = time.time()
-    
+    print(f"[INFO] Início da análise: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
     try:
         # 1. Carregar e validar dados
         df_logs, efficient_frontier = _load_and_validate_data(output_dir, efficient_frontier_file)
         
         # 2. Calcular fronteira de Pareto com paralelização opcional
-        print("🔍 Calculando fronteira de Pareto...")
+        print("[INFO] Calculando fronteira de Pareto...")
         if use_parallel and len(df_logs) > 10000:
             pareto_frontier = calculate_pareto_frontier_parallel(df_logs, n_processes)
         else:
             pareto_frontier = calculate_pareto_frontier(df_logs)
-        print(f"✅ Fronteira de Pareto calculada com {len(pareto_frontier)} pontos")
+        print(f"[INFO] Fronteira de Pareto calculada com {len(pareto_frontier)} pontos")
         
         # 3. Calcular métricas com paralelização opcional
         df_logs, metrics = _calculate_metrics(df_logs, efficient_frontier, pareto_frontier, use_parallel)
@@ -989,7 +990,7 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
         best_pareto_solutions = None
         
         if efficient_frontier is not None and 'percent_error' in df_logs.columns:
-            print("🏆 Selecionando melhores soluções para cada ponto da fronteira eficiente...")
+            print("[INFO] Selecionando melhores soluções para cada ponto da fronteira eficiente...")
             if use_parallel:
                 best_efficient_solutions = get_best_solutions_per_frontier_point_parallel(
                     df_logs, efficient_frontier, n_solutions_per_point=100, n_processes=n_processes
@@ -998,9 +999,9 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
                 best_efficient_solutions = get_best_solutions_per_frontier_point(
                     df_logs, efficient_frontier, n_solutions_per_point=100
                 )
-            print(f"✅ Selecionadas {len(best_efficient_solutions)} melhores soluções para fronteira eficiente")
+            print(f"[INFO] Selecionadas {len(best_efficient_solutions)} melhores soluções para fronteira eficiente")
         
-        print("🏆 Selecionando melhores soluções para cada ponto da fronteira de Pareto...")
+        print("[INFO] Selecionando melhores soluções para cada ponto da fronteira de Pareto...")
         if 'percent_error' in df_logs.columns:
             if use_parallel:
                 best_pareto_solutions = get_best_solutions_per_frontier_point_parallel(
@@ -1014,7 +1015,7 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
             # Fallback se não há erro de interpolação
             n_best = min(100, len(pareto_frontier))
             best_pareto_solutions = get_best_solutions_for_frontier(pareto_frontier, n_best)
-        print(f"✅ Selecionadas {len(best_pareto_solutions)} melhores soluções para fronteira de Pareto")
+        print(f"[INFO] Selecionadas {len(best_pareto_solutions)} melhores soluções para fronteira de Pareto")
         
         # 5. Calcular hipervolumes
         hv_metrics = _calculate_hypervolumes(df_logs, best_efficient_solutions, best_pareto_solutions)
@@ -1033,7 +1034,7 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
         _save_analysis_results(output_dir, metrics, pareto_frontier, best_efficient_solutions, best_pareto_solutions)
         
         # 8. Gerar gráficos (apenas se necessário)
-        print("📈 Gerando gráficos...")
+        print(" [INFO] Gerando gráficos...")
         plot_frontiers_comparison(
             output_dir, df_logs, efficient_frontier, pareto_frontier, 
             best_efficient_solutions, best_pareto_solutions
@@ -1041,25 +1042,25 @@ def analyze_portfolio_results(output_dir, efficient_frontier_file=None, use_para
         
         # 9. Exibir resumo
         total_time = time.time() - start_time
-        print(f"\n⏱️ Tempo total de processamento: {total_time:.2f}s")
+        print(f"\n[INFO] Tempo total de processamento: {total_time:.2f}s")
         _display_metrics_summary(metrics)
         
         print("="*60)
-        print(f"✅ Análise completa! Resultados salvos em: {output_dir}")
+        print(f"[INFO] Análise completa! Resultados salvos em: {output_dir}")
         
         return metrics
         
     except Exception as e:
-        print(f"❌ Erro durante análise: {e}")
+        print(f"[ERROR] Erro durante análise: {e}")
         raise
 
 def _save_analysis_results(output_dir, metrics, pareto_frontier, best_efficient_solutions, best_pareto_solutions):
     """Salva os resultados da análise."""
-    print("💾 Salvando métricas e populações filtradas...")
+    print("[INFO] Salvando métricas e populações filtradas...")
     
     # Salvar métricas
     metrics_path = save_metrics_to_csv(output_dir, metrics)
-    print(f"✅ Métricas salvas em: {metrics_path}")
+    print(f"[INFO] Métricas salvas em: {metrics_path}")
     
     # Salvar populações
     save_filtered_populations(
@@ -1072,31 +1073,31 @@ def _save_analysis_results(output_dir, metrics, pareto_frontier, best_efficient_
 def _display_metrics_summary(metrics):
     """Exibe resumo das métricas calculadas."""
     print("\n" + "="*60)
-    print("📊 RESUMO DAS MÉTRICAS CALCULADAS")
+    print("[INFO] RESUMO DAS MÉTRICAS CALCULADAS")
     print("="*60)
-    print(f"📈 Total de avaliações: {metrics['total_evaluations']}")
-    print(f"🎯 Tamanho da fronteira de Pareto: {metrics['pareto_frontier_size']}")
+    print(f"[INFO] Total de avaliações: {metrics['total_evaluations']}")
+    print(f"[INFO] Tamanho da fronteira de Pareto: {metrics['pareto_frontier_size']}")
     
     if 'processing_mode' in metrics:
         mode_icon = "🚀" if metrics['processing_mode'] == 'parallel' else "🐌"
         print(f"{mode_icon} Modo de processamento: {metrics['processing_mode']}")
         if metrics['processing_mode'] == 'parallel':
-            print(f"⚙️ Processos utilizados: {metrics.get('n_processes_used', 'N/A')}")
+            print(f" [INFO] Processos utilizados: {metrics.get('n_processes_used', 'N/A')}")
     
     if metrics['igd_plus'] is not None:
-        print(f"📐 IGD+: {metrics['igd_plus']:.12e}")
+        print(f"[INFO] IGD+: {metrics['igd_plus']:.12e}")
     
     if metrics['avg_interpolation_error'] is not None:
-        print(f"📏 Erro médio de interpolação: {metrics['avg_interpolation_error']:.4e}")
-        print(f"📊 Erro mediano de interpolação: {metrics['median_interpolation_error']:.4e}")
+        print(f"[INFO] Erro médio de interpolação: {metrics['avg_interpolation_error']:.4e}")
+        print(f"[INFO] Erro mediano de interpolação: {metrics['median_interpolation_error']:.4e}")
     
-    print(f"📦 Hipervolume geral: {metrics['hypervolume_general']:.12e}")
+    print(f"[INFO] Hipervolume geral: {metrics['hypervolume_general']:.12e}")
     
     if metrics['hypervolume_best_pareto'] is not None:
-        print(f"🏆 Hipervolume melhores Pareto: {metrics['hypervolume_best_pareto']:.12e}")
+        print(f"[INFO] Hipervolume melhores Pareto: {metrics['hypervolume_best_pareto']:.12e}")
     
     if metrics['hypervolume_best_efficient'] is not None:
-        print(f"💎 Hipervolume melhores eficientes: {metrics['hypervolume_best_efficient']:.12e}")
+        print(f"[INFO] Hipervolume melhores eficientes: {metrics['hypervolume_best_efficient']:.12e}")
     
     if metrics['best_sharpe'] is not None:
-        print(f"⭐ Melhor Sharpe ratio: {metrics['best_sharpe']:.12f}")
+        print(f"[INFO] Melhor Sharpe ratio: {metrics['best_sharpe']:.12f}")

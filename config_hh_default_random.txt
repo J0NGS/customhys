@@ -1,12 +1,12 @@
 {
     "cardinality": 10,  
     "cardinality_min": 1,  
-    "num_iterations":100, 
-    "num_agents": 30,  
+    "num_iterations":30, 
+    "num_agents": 5,  
     "as_mh": true,  
     "allow_weight_matrix": true,  
     "num_replicas": 5,  
-    "num_steps": 25,  
+    "num_steps": 30,  
     "stagnation_percentage": 0.40,  
     "max_temperature": 1,  
     "min_temperature": 1e-6,  
@@ -17,5 +17,5 @@
     "repeat_operators": true,  
     "verbose": true,  
     "solver": "static",  
-    "initial_scheme": "random"
+    "initial_scheme": "lhc"
 }
