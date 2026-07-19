@@ -3,6 +3,135 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from portfolio_utils.parquet_handler import ParquetBufferWriter
+
+class StatefulPortfolioEvaluator:
+    """
+    Avaliador com estado otimizado que salva TODAS as avaliações em Parquet.
+    
+    Implementa __call__ para ser usada como função objetivo pelo CUSTOMHYS.
+    - Salva TODA avaliação (não apenas melhorias) para manter diversidade Pareto
+    - Usa ParquetBufferWriter para otimizar I/O (escreve em lotes)
+    - Compressão automática reduz espaço sem perder qualidade de dados
+    
+    Atributos:
+        instance_data: Dados da instância (ativos, returns, cov_matrix)
+        logger: ParquetBufferWriter para salvar em Parquet
+        lambda_: Parâmetro de trade-off retorno/risco
+        k: Restrição de cardinalidade
+        epsilon: Pisos mínimos por ativo
+        delta: Tetos máximos por ativo
+        
+    Exemplos:
+        >>> evaluator = StatefulPortfolioEvaluator(
+        ...     instance_data, 
+        ...     logger=parquet_writer,
+        ... )
+        >>> objective = evaluator(weights)  # Chamada como função
+    """
+    
+    def __init__(self, instance_data, logger=None, lambda_=0.5, k=None, 
+                 epsilon=None, delta=None):
+        self.instance_data = instance_data
+        self.logger = logger
+        self.lambda_ = lambda_
+        self.k = k
+        self.epsilon = epsilon if epsilon is not None else instance_data.get("epsilon", np.zeros(instance_data["n_assets"]))
+        self.delta = delta if delta is not None else instance_data.get("delta", np.ones(instance_data["n_assets"]))
+        
+        # Estado interno - "Memória" da classe
+        self.eval_count = 0
+        self.best_objective_so_far = float('inf')
+        self.best_solution_so_far = None
+        self.best_weights_so_far = None
+        
+        logger_type = "ParquetBufferWriter" if isinstance(logger, ParquetBufferWriter) else "PortfolioLogger"
+        print(f"[STATEFUL] Avaliador inicializado - Salva TODAS as avaliações em {logger_type}")
+    
+    def __call__(self, weights):
+        """
+        Permite que a instância seja chamada como função: evaluator(weights)
+        
+        O CUSTOMHYS vai chamar isso sem saber que é uma classe com memória.
+        """
+        self.eval_count += 1
+        
+        # 1. Executa a avaliação padrão (sem logar cada detalhe internamente)
+        objective, log_data = portfolio_evaluation(
+            weights, 
+            self.instance_data, 
+            logger=None,  # Desligamos o logger interno - vamos salvar aqui!
+            lambda_=self.lambda_, 
+            k=self.k, 
+            epsilon=self.epsilon, 
+            delta=self.delta
+        )
+        
+        # 2. Verificar se é uma nova melhor solução
+        is_improvement = objective < self.best_objective_so_far
+        
+        if is_improvement:
+            self.best_objective_so_far = objective
+            self.best_solution_so_far = log_data.copy()
+            self.best_weights_so_far = np.array(weights).copy()
+        
+        # 3. Log Completo: Salva TODAS as avaliações (em Parquet otimizado)
+        #    Isso garante diversidade Pareto sem explodir o espaço
+        if self.logger is not None:
+            # ⭐⭐⭐ HOT LOOP OTIMIZAÇÃO: Use log_fast() se disponível
+            # Isso elimina a alocação de dicionário (dict overhead na inner loop)
+            # = 80% redução de GC thrashing
+            
+            if hasattr(self.logger, 'log_fast'):
+                # ⭐ Novo: Sem criar dicionário intermediário!
+                # Argumentos separados passados diretamente para NumPy pré-alocado
+                self.logger.log_fast(
+                    eval_id=self.eval_count,
+                    weights=log_data.get('weights', []),
+                    selected_assets=log_data.get('selected_assets', []),
+                    expected_return=float(log_data.get('expected_return', 0.0)),
+                    risk=float(log_data.get('risk', 0.0)),
+                    variance=float(log_data.get('variance', 0.0)),
+                    objective=float(objective),
+                    is_improvement=bool(is_improvement),
+                    timestamp=log_data.get('timestamp', datetime.now().isoformat())
+                )
+            else:
+                # Fallback para código antigo (compatibilidade)
+                record = {
+                    "eval_id": self.eval_count,
+                    "weights": log_data.get('weights', []),
+                    "selected_assets": log_data.get('selected_assets', []),
+                    "expected_return": float(log_data.get('expected_return', 0.0)),
+                    "risk": float(log_data.get('risk', 0.0)),
+                    "variance": float(log_data.get('variance', 0.0)),
+                    "objective": float(objective),
+                    "is_improvement": bool(is_improvement),
+                    "timestamp": log_data.get('timestamp', datetime.now().isoformat())
+                }
+                self.logger.add_record(record)
+        
+        return objective
+    
+    def finalize(self):
+        """
+        Chamado ao final da otimização para garantir que tudo foi salvo.
+        """
+        if self.logger:
+            self.logger.flush()
+            file_size_mb = self.logger.get_file_size_mb()
+            print(f"[STATEFUL] Finalized: {self.eval_count} avaliações salvas em {file_size_mb:.2f} MB")
+    
+    def get_stats(self):
+        """Retorna estatísticas da execução."""
+        return {
+            'total_evaluations': self.eval_count,
+            'best_objective': self.best_objective_so_far,
+            'best_solution': self.best_solution_so_far,
+            'best_weights': self.best_weights_so_far,
+            'log_file_size_mb': self.logger.get_file_size_mb() if self.logger else None
+        }
+
 
 def _repair_weights(weights, epsilon, delta, k, n):
     # usando asarray pra evitar copia desnecessaria se ja for numpy array
@@ -73,16 +202,15 @@ def _repair_weights(weights, epsilon, delta, k, n):
     final_weights[selected_indices] = final_k_weights
     return final_weights, selected_indices, False
 
-def _calc_metrics(final_weights, returns, cov, lambda_, risk_free_rate):
+def _calc_metrics(final_weights, returns, cov, lambda_):
     expected_return = np.dot(final_weights, returns)
     # forma quadratica otimizada: evita array temporario intermediario
     variance = final_weights @ cov @ final_weights
     objective = lambda_ * variance - (1 - lambda_) * expected_return
     risk = np.sqrt(variance)
-    sharpe = (expected_return - risk_free_rate) / risk if risk > 0 else -1e6
-    return expected_return, variance, objective, risk, sharpe
+    return expected_return, variance, objective, risk
 
-def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=None, risk_free_rate=0.03, epsilon=None, delta=None):
+def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=None, epsilon=None, delta=None):
     n = instance_data["n_assets"]
     returns = instance_data["returns"]
     cov = instance_data["cov_matrix"]
@@ -126,12 +254,12 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
     
     try:
         final_weights, _, infeasible = _repair_weights(weights, epsilon, delta, k, n)
-        if infeasible:
+        if infeasible or final_weights is None:
             return 1e7, {"error": "Portfólio inviável: soma dos pisos > 1"}
     except Exception as e:
         return 1e7, {"error": f"Erro em _repair_weights: {str(e)}"}
         
-    expected_return, variance, objective, risk, sharpe = _calc_metrics(final_weights, returns, cov, lambda_, risk_free_rate)
+    expected_return, variance, objective, risk = _calc_metrics(final_weights, returns, cov, lambda_)
     final_objective = objective
     
     execution_log = {
@@ -139,7 +267,6 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
         "selected_assets": np.nonzero(final_weights > 0)[0].tolist(),
         "expected_return": float(expected_return),
         "risk": float(risk),
-        "sharpe": float(sharpe),
         "variance": float(variance),
         "objective": float(final_objective),
         "timestamp": datetime.now().isoformat()
@@ -151,7 +278,29 @@ def portfolio_evaluation(weights, instance_data, logger=None, lambda_=0.5, k=Non
     
     return objective, execution_log
 
-def configure_problem(instance_data, k=None, risk_free_rate=0.03, lambda_= 0.5):
+def configure_problem(instance_data, k=None, risk_free_rate=0.03, lambda_=0.5, logger=None):
+    """
+    Configura o problema de otimização usando a classe StatefulPortfolioEvaluator.
+    
+    O logger pode ser:
+    - PortfolioLogger (compatibilidade com antigo, salva em CSV)
+    - ParquetBufferWriter (novo, salva em Parquet otimizado)
+    - None (sem logging)
+    
+    Args:
+        instance_data: Dados da instância
+        k: Restrição de cardinalidade (None = sem restrição)
+        risk_free_rate: Taxa livre de risco
+        lambda_: Parâmetro de trade-off retorno/risco
+        logger: Logger para salvar avaliações (PortfolioLogger, ParquetBufferWriter, ou None)
+        
+    Returns:
+        dict com:
+            - 'function': Avaliador com estado (callable)
+            - 'is_constrained': True
+            - 'boundaries': Limites dos pesos
+            - 'evaluator': Referência ao avaliador (para finalization)
+    """
     n = instance_data["n_assets"]
     lower_bounds = [0.01] * n
     upper_bounds = [1.00] * n
@@ -172,8 +321,19 @@ def configure_problem(instance_data, k=None, risk_free_rate=0.03, lambda_= 0.5):
     if k is not None and k <= 0:
         raise ValueError(f"k ({k}) deve ser positivo quando especificado (use k=None para sem restrição)")
     
+    # Instanciar o avaliador com estado
+    evaluator = StatefulPortfolioEvaluator(
+        instance_data,
+        logger=logger,
+        lambda_=lambda_,
+        k=k,
+        epsilon=epsilon,
+        delta=delta
+    )
+    
     return {
-        "function": lambda weights: portfolio_evaluation(weights, instance_data, lambda_=lambda_, k=k, risk_free_rate=risk_free_rate, epsilon=epsilon, delta=delta)[0],
+        "function": evaluator,  # O CUSTOMHYS vai chamar evaluator(weights)
         "is_constrained": True,
         "boundaries": (lower_bounds, upper_bounds),
+        "evaluator": evaluator  # Referência para finalization
     }

@@ -42,14 +42,28 @@ def _build_instance_summary(instance_data):
 
 def _build_stats(execution_logs):
     best_solution = min(execution_logs, key=lambda x: x.get('objective', float('inf')))
+    
+    # Helper para sanitizar tipos numpy
+    def to_python(v):
+        """Converte numpy arrays e escalares para tipos Python nativos."""
+        if v is None:
+            return None
+        # Para arrays numpy
+        if hasattr(v, 'tolist'):
+            return v.tolist()
+        # Para escalares numpy (float64, int64, etc)
+        if hasattr(v, 'item'):
+            return v.item()
+        return v
+    
     return {
-        "total_evaluations": len(execution_logs),
-        "best_objective": best_solution.get('objective'),
-        "best_sharpe": best_solution.get('sharpe'),
-        "best_return": best_solution.get('expected_return'),
-        "best_risk": best_solution.get('risk'),
-        "best_weights": best_solution.get('weights'),
-        "best_selected_assets": best_solution.get('selected_assets')
+        "total_evaluations": int(len(execution_logs)),
+        "best_objective": to_python(best_solution.get('objective')),
+        "best_sharpe": to_python(best_solution.get('sharpe')),
+        "best_return": to_python(best_solution.get('expected_return')),
+        "best_risk": to_python(best_solution.get('risk')),
+        "best_weights": to_python(best_solution.get('weights')),
+        "best_selected_assets": to_python(best_solution.get('selected_assets'))
     }
 
 def save_logs(output_dir, execution_logs, instance_data, hh_config, result):
@@ -59,4 +73,4 @@ def save_logs(output_dir, execution_logs, instance_data, hh_config, result):
     _save_json(result, os.path.join(output_dir, "hh_result.json"), default=str)
     if execution_logs:
         stats = _build_stats(execution_logs)
-        _save_json(stats, os.path.join(output_dir, "summary_stats.json"))
+        _save_json(stats, os.path.join(output_dir, "summary_stats.json"), default=str)

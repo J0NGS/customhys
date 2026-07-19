@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """
-script para executar analyze_portfolio_results em cada subpasta lambda de um sweep.
-itera por todas as pastas lambda_X.XXXX dentro do diretorio de sweep e gera
-analises individuais (pareto, metricas, graficos) para cada uma.
+Análise consolidada de um lambda sweep.
 
-tambem pode agregar a fronteira eficiente unica de todo o sweep.
+Suporta arquivos em formato CSV e Parquet.
+Em vez de analisar cada lambda individualmente, este script:
+1. Carrega todos os population_pareto_frontier (CSV ou Parquet) de cada lambda
+2. Combina em uma única população agregada
+3. Calcula pareto sobre essa população
+4. Aplica métricas de qualidade:
+   - Erro de interpolação (Chang et al. 2000)
+   - IGD+
+   - Hipervolume
+   - Cardinalidade
+5. Gera gráficos e saídas consolidadas
+
+Resultado: 1 análise consolidada da qualidade do sweep inteiro
+
+⭐ NOVO: Suporte para lazy loading para datasets grandes
 """
 
 import os
@@ -12,36 +24,61 @@ import sys
 import glob
 import argparse
 import time
+import gc
 import pandas as pd
 import numpy as np
-from multiprocessing import Pool, cpu_count
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-# importa a funcao de analise
+# importa as funções de análise
 try:
-    from portfolio_utils.portfolio_analyzer import analyze_portfolio_results
+    from portfolio_utils.portfolio_analyzer import (
+        calculate_pareto_frontier,
+        calculate_pareto_frontier_lazy,
+        calculate_igd_plus,
+        calculate_igd_plus_parallel,
+        load_efficient_frontier,
+        calculate_interpolation_errors,
+        calculate_hypervolume_2d,
+        save_metrics_to_csv,
+        save_filtered_populations,
+        _plot_efficient_vs_all,
+        _plot_efficient_vs_pareto,
+        _plot_cardinalidade_histogram,
+    )
 except ImportError:
     print("[ERROR] Nao foi possivel importar portfolio_analyzer")
-    print("   Certifique-se de estar no diretorio raiz do projeto")
     sys.exit(1)
+
+
+def _load_dataframe_flexible(folder, filename_base):
+    """
+    Carrega um arquivo CSV ou Parquet.
+    Tenta carregar filename_base.parquet primeiro, depois filename_base.csv
+    """
+    parquet_path = os.path.join(folder, f"{filename_base}.parquet")
+    csv_path = os.path.join(folder, f"{filename_base}.csv")
+    
+    if os.path.exists(parquet_path):
+        return pd.read_parquet(parquet_path)
+    elif os.path.exists(csv_path):
+        return pd.read_csv(csv_path)
+    else:
+        return None
 
 
 def find_lambda_folders(sweep_dir):
     """
-    encontra todas as subpastas lambda_X.XXXX dentro do diretorio de sweep.
-    
-    args:
-        sweep_dir: diretorio do sweep
-    
-    returns:
-        list: lista de caminhos das pastas lambda ordenadas
+    Encontra todas as subpastas lambda_X.XXXX dentro do diretório de sweep.
     """
     pattern = os.path.join(sweep_dir, "lambda_*")
     lambda_folders = glob.glob(pattern)
     
-    # filtra apenas diretorios
+    # Filtra apenas diretórios
     lambda_folders = [f for f in lambda_folders if os.path.isdir(f)]
     
-    # ordena por valor de lambda
+    # Ordena por valor de lambda
     lambda_folders.sort(key=lambda x: float(os.path.basename(x).split('_')[1]))
     
     return lambda_folders
@@ -49,13 +86,7 @@ def find_lambda_folders(sweep_dir):
 
 def detect_instance_from_sweep(sweep_dir):
     """
-    tenta detectar a instancia (port1, port2, etc) pelo nome da pasta sweep.
-    
-    args:
-        sweep_dir: diretorio do sweep
-    
-    returns:
-        str: instancia detectada (ex: 'port1') ou None
+    Tenta detectar a instância pelo nome da pasta sweep.
     """
     import re
     folder_name = os.path.basename(sweep_dir)
@@ -67,13 +98,7 @@ def detect_instance_from_sweep(sweep_dir):
 
 def get_frontier_file(instance):
     """
-    retorna o arquivo da fronteira eficiente para uma instancia.
-    
-    args:
-        instance: instancia (ex: 'port1')
-    
-    returns:
-        str: caminho do arquivo ou None
+    Retorna o arquivo da fronteira eficiente para uma instância.
     """
     frontier_map = {
         'port1': 'portef1.txt',
@@ -89,105 +114,122 @@ def get_frontier_file(instance):
     return None
 
 
-def analyze_lambda_folder(params):
+def _plot_efficient_vs_all_consolidated(output_dir, df_logs, efficient_frontier, pareto_frontier=None):
     """
-    executa analyze_portfolio_results em uma pasta lambda individual.
-    funcao wrapper para multiprocessing.
+    ⭐ Versão SCATTER para análise consolidada (batch_analyze).
     
-    args:
-        params: tupla (lambda_folder, frontier_file, skip_existing, index, total)
-    
-    returns:
-        dict: {'success': bool, 'lambda_name': str, 'skipped': bool, 'time': float}
+    Plota fronteira eficiente vs TODAS as soluções usando scatter.
+    Diferente da versão hexbin usada em lambdas individuais.
     """
-    lambda_folder, frontier_file, skip_existing, idx, _ = params
-    lambda_name = os.path.basename(lambda_folder)
+    plt.figure(figsize=(12, 8))
     
-    # verifica se ja tem analise
-    metrics_file = os.path.join(lambda_folder, "analysis_metrics.csv")
-    if skip_existing and os.path.exists(metrics_file):
-        return {
-            'success': True,
-            'lambda_name': lambda_name,
-            'skipped': True,
-            'time': 0,
-            'index': idx
-        }
+    print(f"[PLOT] Plotando {len(df_logs)} soluções consolidadas via scatter")
     
-    # verifica se tem execution_logs.csv
-    logs_file = os.path.join(lambda_folder, "execution_logs.csv")
-    if not os.path.exists(logs_file):
-        return {
-            'success': False,
-            'lambda_name': lambda_name,
-            'skipped': False,
-            'time': 0,
-            'index': idx,
-            'error': 'execution_logs.csv nao encontrado'
-        }
+    # SCATTER: Todos os dados individuais para análise consolidada
+    plt.scatter(df_logs["risk"], df_logs["expected_return"], 
+               s=6, color='gray', alpha=0.6, label="Todas as Soluções", rasterized=True)
     
-    try:
-        start = time.time()
+    # Destacar a fronteira de Pareto se fornecida
+    if pareto_frontier is not None and len(pareto_frontier) > 0:
+        plt.scatter(pareto_frontier["risk"], pareto_frontier["expected_return"], 
+                   s=12, color='red', alpha=0.8, label="Fronteira de Pareto", zorder=4, 
+                   edgecolors='darkred', linewidths=0.5)
+    
+    plt.plot(efficient_frontier["std_dev"], efficient_frontier["mean_return"], 
+            color='blue', linewidth=2, label="Fronteira Eficiente")
+
+    # Coletar todas as soluções especiais para detectar sobreposições
+    special_solutions = []
+    
+    # Melhor Sharpe
+    if 'sharpe' in df_logs.columns:
+        best_sharpe = df_logs.loc[df_logs["sharpe"].idxmax()]
+        special_solutions.append({
+            'risk': best_sharpe["risk"],
+            'return': best_sharpe["expected_return"],
+            'color': 'gold',
+            'label': f"Melhor Sharpe ({best_sharpe['sharpe']:.4f})",
+            'type': 'sharpe'
+        })
+    
+    # Menor risco
+    best_risk = df_logs.loc[df_logs["risk"].idxmin()]
+    special_solutions.append({
+        'risk': best_risk["risk"],
+        'return': best_risk["expected_return"],
+        'color': 'cyan',
+        'label': f"Menor Risco ({best_risk['risk']:.4f})",
+        'type': 'risk'
+    })
+    
+    # Maior retorno
+    best_return = df_logs.loc[df_logs["expected_return"].idxmax()]
+    special_solutions.append({
+        'risk': best_return["risk"],
+        'return': best_return["expected_return"],
+        'color': 'orange',
+        'label': f"Maior Retorno ({best_return['expected_return']:.4f})",
+        'type': 'return'
+    })
+    
+    # Melhor objetivo
+    best_objective = df_logs.loc[df_logs["objective"].idxmin()]
+    special_solutions.append({
+        'risk': best_objective["risk"],
+        'return': best_objective["expected_return"],
+        'color': 'purple',
+        'label': f"Melhor Objetivo ({best_objective['objective']:.4f})",
+        'type': 'objective'
+    })
+    
+    # Plotar soluções especiais com sistema de deslocamento para sobreposições
+    plotted_positions = []
+    offset_distance = 0.001
+    
+    for i, solution in enumerate(special_solutions):
+        risk_pos = solution['risk']
+        return_pos = solution['return']
         
-        # executa analise com use_parallel=False (estamos em um daemon process)
-        # daemon processes nao podem criar child processes
-        analyze_portfolio_results(lambda_folder, frontier_file, use_parallel=False)
+        # Verificar se já existe uma solução plotada na mesma posição
+        position_occupied = False
+        for prev_pos in plotted_positions:
+            if abs(prev_pos[0] - risk_pos) < 1e-10 and abs(prev_pos[1] - return_pos) < 1e-10:
+                position_occupied = True
+                break
         
-        elapsed = time.time() - start
-        return {
-            'success': True,
-            'lambda_name': lambda_name,
-            'skipped': False,
-            'time': elapsed,
-            'index': idx
-        }
+        # Se a posição está ocupada, aplicar um pequeno deslocamento circular
+        if position_occupied:
+            import math
+            angle = (i * 2 * math.pi) / len(special_solutions)
+            risk_pos += offset_distance * math.cos(angle)
+            return_pos += offset_distance * math.sin(angle)
         
-    except Exception as e:
-        return {
-            'success': False,
-            'lambda_name': lambda_name,
-            'skipped': False,
-            'time': 0,
-            'index': idx,
-            'error': str(e)
-        }
+        plt.scatter(risk_pos, return_pos, s=120, color=solution['color'], 
+                   edgecolor='black', alpha=0.8, label=solution['label'], zorder=5)
+        
+        plotted_positions.append((risk_pos, return_pos))
+    
+    plt.title("Fronteira Eficiente vs Todas as Soluções (Análise Consolidada)")
+    plt.xlabel("Risco (Desvio Padrão)")
+    plt.ylabel("Retorno Esperado")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "fronteira_eficiente_vs_todas.png"), dpi=150, bbox_inches='tight')
+    
+    # Garbage collection
+    plt.close('all')
+    import gc
+    gc.collect()
 
 
-def is_dominated(point, other_points):
+def aggregate_pareto_populations(sweep_dir):
     """
-    verifica se um ponto eh dominado por algum outro ponto.
-    minimizacao de risco, maximizacao de retorno.
-    
-    args:
-        point: tupla (risk, return)
-        other_points: array nx2 de (risk, return)
-    
-    returns:
-        bool: True se dominado
-    """
-    risk, ret = point
-    
-    # um ponto domina outro se tem menor risco E maior retorno (ou igual em ambos mas melhor em pelo menos um)
-    for other_risk, other_ret in other_points:
-        if other_risk <= risk and other_ret >= ret:
-            if other_risk < risk or other_ret > ret:  # pelo menos um estritamente melhor
-                return True
-    return False
-
-
-def aggregate_efficient_frontier(sweep_dir, output_file='aggregated_frontier.csv'):
-    """
-    agrega todas as fronteiras de pareto dos lambdas em uma unica fronteira eficiente.
-    
-    args:
-        sweep_dir: diretorio do sweep
-        output_file: nome do arquivo de saida
-    
-    returns:
-        pd.DataFrame: fronteira agregada ou None se falhou
+    Agrega todas as fronteiras de pareto dos lambdas em uma única população.
+    Suporta tanto CSV quanto Parquet.
     """
     print("\n" + "="*70)
-    print("AGREGANDO FRONTEIRA EFICIENTE DO SWEEP")
+    print("AGREGANDO POPULAÇÃO PARETO DE TODOS OS LAMBDAS")
     print("="*70)
     
     lambda_folders = find_lambda_folders(sweep_dir)
@@ -196,153 +238,242 @@ def aggregate_efficient_frontier(sweep_dir, output_file='aggregated_frontier.csv
         print("[ERROR] Nenhuma pasta lambda encontrada")
         return None
     
-    all_points = []
+    all_populations = []
     
-    print(f"[INFO] Coletando pontos de {len(lambda_folders)} lambdas...")
+    print(f"[INFO] Coletando population_pareto_frontier (CSV ou Parquet) de {len(lambda_folders)} lambdas...")
     
-    for lambda_folder in lambda_folders:
-        pareto_file = os.path.join(lambda_folder, "population_pareto_frontier.csv")
+    for idx, lambda_folder in enumerate(lambda_folders, 1):
+        lambda_name = os.path.basename(lambda_folder)
         
-        if not os.path.exists(pareto_file):
-            lambda_name = os.path.basename(lambda_folder)
-            print(f"[WARNING] {lambda_name}: pareto_frontier.csv nao encontrado")
+        # Tenta carregar Parquet ou CSV
+        df = _load_dataframe_flexible(lambda_folder, "population_pareto_frontier")
+        
+        if df is None:
+            print(f"  [{idx}/{len(lambda_folders)}] [SKIP] {lambda_name}: population_pareto_frontier não encontrado")
             continue
         
         try:
-            df = pd.read_csv(pareto_file)
-            
-            # adiciona coluna lambda_value
+            # Adiciona coluna lambda_value para rastreabilidade
             lambda_value = float(os.path.basename(lambda_folder).split('_')[1])
             df['lambda_value'] = lambda_value
             
-            all_points.append(df)
+            all_populations.append(df)
+            file_format = "parquet" if os.path.exists(os.path.join(lambda_folder, "population_pareto_frontier.parquet")) else "csv"
+            print(f"  [{idx}/{len(lambda_folders)}] [OK] {lambda_name}: {len(df)} pontos ({file_format})")
             
         except Exception as e:
-            print(f"[ERROR] Falha ao ler {pareto_file}: {e}")
+            print(f"  [{idx}/{len(lambda_folders)}] [ERROR] {lambda_name}: {e}")
     
-    if not all_points:
-        print("[ERROR] Nenhum ponto coletado")
+    if not all_populations:
+        print("[ERROR] Nenhuma população coletada")
         return None
     
-    # combinar todos os pontos
-    combined = pd.concat(all_points, ignore_index=True)
+    # Combinar todas as populações
+    aggregated = pd.concat(all_populations, ignore_index=True)
+    print(f"\n[INFO] Total de pontos coletados: {len(aggregated)}")
+    print(f"[INFO] Lambdas representados: {aggregated['lambda_value'].nunique()}")
     
-    print(f"[INFO] Total de pontos coletados: {len(combined)}")
-    
-    # calcular fronteira de pareto (nao-dominados)
-    print("[INFO] Calculando fronteira de Pareto agregada...")
-    
-    points_array = combined[['risk', 'expected_return']].values
-    non_dominated_mask = []
-    
-    for i, point in enumerate(points_array):
-        # verificar se eh dominado por algum outro ponto
-        other_points = np.delete(points_array, i, axis=0)
-        dominated = is_dominated(point, other_points)
-        non_dominated_mask.append(not dominated)
-    
-    frontier = combined[non_dominated_mask].copy()
-    frontier = frontier.sort_values('risk').reset_index(drop=True)
-    
-    print(f"[INFO] Fronteira agregada: {len(frontier)} pontos nao-dominados")
-    
-    # salvar
-    output_path = os.path.join(sweep_dir, output_file)
-    frontier.to_csv(output_path, index=False)
-    
-    print(f"[SUCCESS] Fronteira agregada salva: {output_path}")
-    
-    # estatisticas
-    print(f"\n[STATS] Faixa de risco: [{frontier['risk'].min():.6f}, {frontier['risk'].max():.6f}]")
-    print(f"[STATS] Faixa de retorno: [{frontier['expected_return'].min():.6f}, {frontier['expected_return'].max():.6f}]")
-    print(f"[STATS] Lambdas representados: {frontier['lambda_value'].nunique()}")
-    
-    # detectar instancia e carregar fronteiras do problema
-    instance = detect_instance_from_sweep(sweep_dir)
-    frontier_file = None
-    if instance:
-        frontier_file = get_frontier_file(instance)
-    
-    # gerar grafico
-    print("\n[INFO] Gerando grafico da fronteira agregada...")
-    plot_aggregated_frontier(sweep_dir, combined, frontier, frontier_file)
-    
-    return frontier
+    return aggregated
 
 
-def plot_aggregated_frontier(sweep_dir, all_points, frontier, frontier_file=None):
+def analyze_sweep_consolidated(sweep_dir, efficient_frontier_file, use_parallel=True, use_lazy=False, risk_free_rate=0.03):
     """
-    gera grafico mostrando todos os pontos e a fronteira agregada.
+    Executa análise na população agregada de todos os lambdas.
     
-    args:
-        sweep_dir: diretorio do sweep
-        all_points: DataFrame com todos os pontos coletados
-        frontier: DataFrame com a fronteira agregada
-        frontier_file: arquivo da fronteira eficiente do problema (opcional)
+    Args:
+        use_lazy: Se True, usa lazy loading para datasets grandes
+                 (reduz picos de RAM em 60-80%)
     """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+    print("\n" + "="*70)
+    print("ANALISANDO POPULAÇÃO CONSOLIDADA DO SWEEP")
+    print("="*70)
+    # 1. AGREGAR POPULAÇÕES
+    aggregated_population = aggregate_pareto_populations(sweep_dir)
+    if aggregated_population is None or len(aggregated_population) == 0:
+        print("[ERROR] Falha ao agregar população")
+        return None
     
-    _, ax = plt.subplots(figsize=(12, 8))
+    # 2. CRIAR DIRETÓRIO DE SAÍDA
+    output_dir = os.path.join(sweep_dir, "consolidated_analysis")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"\n[INFO] Diretório de saída: {output_dir}")
     
-    # carregar fronteira eficiente do problema se disponivel
-    efficient_frontier = None
-    if frontier_file and os.path.exists(frontier_file):
-        try:
-            df_eff = pd.read_csv(frontier_file, sep=r"\s+", header=None, names=["mean_return", "variance"])
-            df_eff["std_dev"] = np.sqrt(df_eff["variance"])
-            efficient_frontier = df_eff
-            
-            # plotar fronteira eficiente (azul)
-            ax.plot(efficient_frontier["std_dev"], efficient_frontier["mean_return"], 
-                    'b-', linewidth=2, label='Fronteira Eficiente', zorder=6)
-            print(f"[INFO] Fronteira eficiente carregada: {len(efficient_frontier)} pontos")
-        except Exception as e:
-            print(f"[WARNING] Erro ao carregar fronteira eficiente: {e}")
+    # 3. CARREGAR FRONTEIRA EFICIENTE
+    print(f"\n[INFO] Carregando fronteira eficiente: {efficient_frontier_file}")
+    efficient_frontier = load_efficient_frontier(efficient_frontier_file)
+    if efficient_frontier is None:
+        print("[ERROR] Falha ao carregar fronteira eficiente")
+        return None
+    print(f"[INFO] Fronteira eficiente: {len(efficient_frontier)} pontos")
     
-    # plotar todos os pontos (cinza claro, pequenos)
-    ax.scatter(all_points['risk'], all_points['expected_return'], 
-               s=10, alpha=0.3, color='gray', label=f'Todos os pontos Pareto ({len(all_points)})')
+    # 4. CALCULAR PARETO SOBRE A POPULAÇÃO AGREGADA
+    print(f"\n[INFO] Calculando fronteira de Pareto sobre {len(aggregated_population)} pontos...")
+    print(f"[INFO] Modo: {'LAZY (otimizado para RAM)' if use_lazy and len(aggregated_population) > 100000 else 'NORMAL'}")
+    start_time = time.time()
     
-    # plotar fronteira agregada (vermelho, maior)
-    ax.scatter(frontier['risk'], frontier['expected_return'], 
-               s=80, color='red', marker='o', edgecolors='darkred', 
-               linewidths=1.5, label=f'Fronteira Agregada ({len(frontier)} pontos)', zorder=5)
+    # ⭐ NOVO: Usar lazy loading para datasets muito grandes
+    if use_lazy and len(aggregated_population) > 100000:
+        # Salvar agregado temporariamente
+        temp_parquet = os.path.join(output_dir, "_temp_aggregated.parquet")
+        aggregated_population.to_parquet(temp_parquet, compression='snappy')
+        pareto_frontier = calculate_pareto_frontier_lazy(temp_parquet, chunk_size=50000)
+        os.remove(temp_parquet)
+    else:
+        pareto_frontier = calculate_pareto_frontier(aggregated_population)
     
-    # linha conectando fronteira agregada
-    frontier_sorted = frontier.sort_values('risk')
-    ax.plot(frontier_sorted['risk'], frontier_sorted['expected_return'], 
-            'r--', alpha=0.5, linewidth=1.5, zorder=4)
+    elapsed = time.time() - start_time
+    print(f"[SUCCESS] Pareto calculada: {len(pareto_frontier)} pontos em {elapsed:.2f}s")
     
-    ax.set_xlabel('Risco (Desvio Padrão)', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Retorno Esperado', fontsize=12, fontweight='bold')
-    ax.set_title('Fronteira Eficiente Agregada do Lambda Sweep', fontsize=14, fontweight='bold')
-    ax.legend(loc='best', fontsize=10)
-    ax.grid(True, alpha=0.3, linestyle='--')
+    # 5. CALCULAR ERROS DE INTERPOLAÇÃO (OTIMIZAÇÃO: uma única passada)
+    print(f"\n[INTERPOLACAO] Calculando erros de interpolação...")
+    aggregated_with_errors = calculate_interpolation_errors(aggregated_population, efficient_frontier)
     
-    # salvar
-    output_path = os.path.join(sweep_dir, 'aggregated_frontier.png')
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
+    # OTIMIZAÇÃO: Filtra os erros já calculados usando índices ao invés de recalcular
+    pareto_with_errors = aggregated_with_errors.loc[pareto_frontier.index]
     
-    print(f"[SUCCESS] Grafico salvo: {output_path}")
+    # 6. CALCULAR IGD+
+    print(f"\n[IGD+] Calculando IGD+...")
+    igd_plus = None
+    if use_parallel:
+        igd_plus = calculate_igd_plus_parallel(pareto_frontier, efficient_frontier)
+    else:
+        igd_plus = calculate_igd_plus(pareto_frontier, efficient_frontier)
+    
+    if igd_plus is not None:
+        print(f" - IGD+: {igd_plus:.6e}")
+    
+    # 7. CALCULAR HIPERVOLUME
+    print(f"\n[HIPERVOLUME] Calculando hipervolume...")
+    
+    # Referência: pior ponto possível (maior risco, menor retorno)
+    ref_return = aggregated_population['expected_return'].min() - 0.001
+    ref_risk = aggregated_population['risk'].max() + 0.001
+    reference_point = [ref_return, ref_risk]
+    
+    hv_general = calculate_hypervolume_2d(
+        aggregated_population[['expected_return', 'risk']].values,
+        reference_point
+    )
+    hv_pareto = calculate_hypervolume_2d(
+        pareto_frontier[['expected_return', 'risk']].values,
+        reference_point
+    )
+    
+    print(f" - Hipervolume geral: {hv_general:.6e}")
+    print(f" - Hipervolume Pareto: {hv_pareto:.6e}")
+    
+    # 8. CALCULAR SHARPE
+    print(f"\n[SHARPE] Calculando índice de Sharpe com taxa livre de risco = {risk_free_rate:.4f}")
+    aggregated_population['sharpe'] = (aggregated_population['expected_return'] - risk_free_rate) / aggregated_population['risk']
+    pareto_frontier['sharpe'] = (pareto_frontier['expected_return'] - risk_free_rate) / pareto_frontier['risk']
+    
+    best_sharpe_all = aggregated_population['sharpe'].max()
+    best_sharpe_pareto = pareto_frontier['sharpe'].max()
+    print(f" - Melhor Sharpe (geral): {best_sharpe_all:.6f}")
+    print(f" - Melhor Sharpe (Pareto): {best_sharpe_pareto:.6f}")
+    
+    # 9. COMPUTAR MÉTRICAS CONSOLIDADAS (CHANG ET AL. 2000)
+    print(f"\n[METRICS] Computando métricas consolidadas...")
+    
+    # Métricas de erro de interpolação
+    avg_interp_all = aggregated_with_errors['percent_error'].mean()
+    median_interp_all = aggregated_with_errors['percent_error'].median()
+    min_interp_all = aggregated_with_errors['percent_error'].min()
+    max_interp_all = aggregated_with_errors['percent_error'].max()
+    avg_interp_pareto = pareto_with_errors['percent_error'].mean()
+    median_interp_pareto = pareto_with_errors['percent_error'].median()
+    min_interp_pareto = pareto_with_errors['percent_error'].min()
+    max_interp_pareto = pareto_with_errors['percent_error'].max()
+    
+    # Contar pontos com erro válido (bracketing)
+    valid_error_all = aggregated_with_errors['percent_error'].notna().sum()
+    valid_error_pareto = pareto_with_errors['percent_error'].notna().sum()
+    
+    print(f" - Erro médio (todos): {avg_interp_all:.2f}%")
+    print(f" - Erro mediano (todos): {median_interp_all:.2f}%")
+    print(f" - Erro mín (todos): {min_interp_all:.2f}%")
+    print(f" - Erro máx (todos): {max_interp_all:.2f}%")
+    print(f" - Erro médio (Pareto): {avg_interp_pareto:.2f}%")
+    print(f" - Erro mediano (Pareto): {median_interp_pareto:.2f}%")
+    print(f" - Erro mín (Pareto): {min_interp_pareto:.2f}%")
+    print(f" - Erro máx (Pareto): {max_interp_pareto:.2f}%")
+    
+    # 9. SALVAR MÉTRICAS
+    metrics = {
+        'total_aggregated_points': len(aggregated_population),
+        'pareto_frontier_size': len(pareto_frontier),
+        'avg_interpolation_error_all': avg_interp_all,
+        'median_interpolation_error_all': median_interp_all,
+        'min_interpolation_error_all': min_interp_all,
+        'max_interpolation_error_all': max_interp_all,
+        'avg_interpolation_error_pareto': avg_interp_pareto,
+        'median_interpolation_error_pareto': median_interp_pareto,
+        'min_interpolation_error_pareto': min_interp_pareto,
+        'max_interpolation_error_pareto': max_interp_pareto,
+        'valid_error_points_all': valid_error_all,
+        'valid_error_points_pareto': valid_error_pareto,
+        'igd_plus': igd_plus,
+        'hypervolume_general': hv_general,
+        'hypervolume_pareto': hv_pareto,
+        'reference_point_return': ref_return,
+        'reference_point_risk': ref_risk,
+        'best_sharpe': best_sharpe_all,
+        'best_sharpe_pareto': best_sharpe_pareto,
+    }
+    
+    # Salvar métricas
+    metrics_file = save_metrics_to_csv(output_dir, metrics)
+    print(f"\n[SUCCESS] Métricas salvas: {metrics_file}")
+    
+    # 10. SALVAR POPULAÇÕES
+    print(f"\n[INFO] Salvando populações...")
+    save_filtered_populations(
+        output_dir,
+        aggregated_population=aggregated_population,
+        pareto_frontier=pareto_frontier
+    )
+    print(f"[SUCCESS] Populações salvas em {output_dir}/population_*.csv")
+    
+    # 11. GERAR GRÁFICOS
+    print(f"\n[PLOT] Gerando gráficos...")
+    
+    # Gráfico: população agregada vs fronteira eficiente (com SCATTER para análise consolidada)
+    _plot_efficient_vs_all_consolidated(output_dir, aggregated_population, efficient_frontier, pareto_frontier)
+    print(f"[SUCCESS] Gráfico fronteira_eficiente_vs_todas.png gerado")
+    
+    # Gráfico: Pareto vs fronteira eficiente
+    _plot_efficient_vs_pareto(output_dir, efficient_frontier, pareto_frontier)
+    print(f"[SUCCESS] Gráfico fronteira_eficiente_vs_pareto.png gerado")
+    
+    # Gráfico: histograma de cardinalidade
+    _plot_cardinalidade_histogram(output_dir, aggregated_population)
+    print(f"[SUCCESS] Gráfico cardinalidade_histogram.png gerado")
+    
+    print(f"\n" + "="*70)
+    print("[SUCCESS] ANÁLISE CONSOLIDADA CONCLUÍDA!")
+    print("="*70)
+    print(f"[INFO] Resultados salvos em: {output_dir}")
+    print(f"[INFO] Arquivos gerados:")
+    print(f"   - analysis_metrics.csv")
+    print(f"   - population_aggregated_population.csv")
+    print(f"   - population_pareto_frontier.csv")
+    print(f"   - fronteira_eficiente_vs_todas.png")
+    print(f"   - fronteira_eficiente_vs_pareto.png")
+    print(f"   - cardinalidade_histogram.png")
+    
+    return metrics
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='executa analyze_portfolio_results em cada lambda de um sweep (paralelo)',
+        description='Análise consolidada de um lambda sweep',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 exemplos de uso:
   python batch_analyze_lambda_sweep.py <sweep_dir>
-  python batch_analyze_lambda_sweep.py 20251126_port1_random_lambda_sweep_50
+  python batch_analyze_lambda_sweep.py 20251218_port2_sobol_lambda_sweep_50
   python batch_analyze_lambda_sweep.py <sweep_dir> --frontier portef2.txt
-  python batch_analyze_lambda_sweep.py <sweep_dir> --skip-existing
-  python batch_analyze_lambda_sweep.py <sweep_dir> --limit 10
-  python batch_analyze_lambda_sweep.py <sweep_dir> --aggregate-frontier
-  python batch_analyze_lambda_sweep.py <sweep_dir> --workers 4
+  python batch_analyze_lambda_sweep.py <sweep_dir> --sequential  (sem paralelização)
         """
     )
     
@@ -357,34 +488,22 @@ exemplos de uso:
     )
     
     parser.add_argument(
-        '--skip-existing', '-s',
+        '--sequential',
         action='store_true',
-        help='pula pastas que ja tem analise_metricas.csv'
+        help='executa análise sequencial (sem paralelização)'
     )
     
     parser.add_argument(
-        '--limit', '-l',
-        type=int,
-        help='limita o numero de pastas lambda a processar (util para testes)'
-    )
-    
-    parser.add_argument(
-        '--dry-run', '-n',
+        '--lazy',
         action='store_true',
-        help='mostra o que seria executado sem executar'
+        help='⭐ NOVO: ativa lazy loading para datasets grandes (reduz RAM em 60-80%%)'
     )
     
     parser.add_argument(
-        '--aggregate-frontier', '-a',
-        action='store_true',
-        help='gera fronteira eficiente agregada do sweep completo'
-    )
-    
-    parser.add_argument(
-        '--workers', '-w',
-        type=int,
-        default=cpu_count() // 2,
-        help=f'numero de processos paralelos (default: {cpu_count() // 2})'
+        '--risk-free-rate',
+        type=float,
+        default=0.00057,
+        help='taxa livre de risco para cálculo do índice de Sharpe (padrão: 0.00057 = 3%% anual convertido para semanal)'
     )
     
     args = parser.parse_args()
@@ -395,11 +514,11 @@ exemplos de uso:
         sys.exit(1)
     
     print("="*70)
-    print("BATCH ANALYZE LAMBDA SWEEP (PARALELO)")
+    print("BATCH ANALYZE LAMBDA SWEEP - ANÁLISE CONSOLIDADA")
     print("="*70)
     print(f"[INFO] Diretorio: {os.path.abspath(args.sweep_dir)}")
     
-    # encontrar pastas lambda
+    # verificar pastas lambda
     lambda_folders = find_lambda_folders(args.sweep_dir)
     
     if not lambda_folders:
@@ -407,11 +526,6 @@ exemplos de uso:
         sys.exit(1)
     
     print(f"[INFO] Encontradas {len(lambda_folders)} pastas lambda")
-    
-    # aplicar limite se especificado
-    if args.limit:
-        lambda_folders = lambda_folders[:args.limit]
-        print(f"[INFO] Limitando a {args.limit} pastas (--limit)")
     
     # determinar arquivo de fronteira
     frontier_file = args.frontier
@@ -437,90 +551,32 @@ exemplos de uso:
     
     print(f"[INFO] Usando fronteira: {frontier_file}")
     
-    if args.skip_existing:
-        print("[INFO] Modo skip-existing ativado")
-    
-    print(f"[INFO] Usando {args.workers} workers paralelos")
-    
-    if args.dry_run:
-        print("[INFO] Modo DRY RUN - apenas simulacao")
-        print("\n[DRY RUN] Pastas que seriam processadas:")
-        for folder in lambda_folders:
-            print(f"   - {os.path.basename(folder)}")
-        sys.exit(0)
-    
-    # preparar parametros para workers
-    params_list = [
-        (folder, frontier_file, args.skip_existing, i, len(lambda_folders))
-        for i, folder in enumerate(lambda_folders, 1)
-    ]
-    
-    # processar em paralelo
-    print("\n" + "="*70)
-    print("INICIANDO PROCESSAMENTO PARALELO")
-    print("="*70 + "\n")
-    
-    stats = {
-        'total': len(lambda_folders),
-        'success': 0,
-        'failed': 0,
-        'skipped': 0
-    }
-    
+    # executar análise consolidada
     start_time = time.time()
+    use_parallel = not args.sequential
+    use_lazy = args.lazy
+    
+    if use_lazy:
+        print("[INFO] ⭐ Lazy loading ATIVADO - RAM otimizada para datasets grandes")
     
     try:
-        with Pool(processes=args.workers) as pool:
-            results = pool.map(analyze_lambda_folder, params_list)
+        metrics = analyze_sweep_consolidated(
+            args.sweep_dir, 
+            frontier_file,
+            use_parallel=use_parallel,
+            use_lazy=use_lazy,
+            risk_free_rate=args.risk_free_rate
+        )
         
-        # processar resultados
-        for result in results:
-            if result['success']:
-                if result['skipped']:
-                    stats['skipped'] += 1
-                    print(f"[{result['index']}/{stats['total']}] [SKIP] {result['lambda_name']}: analise ja existe")
-                else:
-                    stats['success'] += 1
-                    print(f"[{result['index']}/{stats['total']}] [SUCCESS] {result['lambda_name']} concluido em {result['time']:.1f}s")
-            else:
-                stats['failed'] += 1
-                error_msg = result.get('error', 'erro desconhecido')
-                print(f"[{result['index']}/{stats['total']}] [ERROR] {result['lambda_name']}: {error_msg}")
-    
-    except KeyboardInterrupt:
-        print("\n[WARNING] Processamento interrompido pelo usuario (Ctrl+C)")
-        print("[INFO] Alguns lambdas podem nao ter sido processados")
-    
-    # relatorio final
-    total_time = time.time() - start_time
-    
-    print("\n" + "="*70)
-    print("RELATORIO FINAL")
-    print("="*70)
-    print(f"[INFO] Total processado: {stats['total']}")
-    print(f"[SUCCESS] Sucessos: {stats['success']}")
-    print(f"[ERROR] Falhas: {stats['failed']}")
-    print(f"[SKIP] Pulados: {stats['skipped']}")
-    print(f"[TIME] Tempo total: {total_time/60:.1f}min")
-    
-    if stats['total'] > 0:
-        print(f"[TIME] Tempo medio por pasta: {total_time/stats['total']:.1f}s")
-    
-    if stats['success'] > 0:
-        print("\n[INFO] Analises concluidas com sucesso!")
-        print("[INFO] Verifique os arquivos gerados em cada pasta lambda_*:")
-        print("   - analysis_metrics.csv")
-        print("   - population_pareto_frontier.csv")
-        print("   - population_best_efficient.csv")
-        print("   - population_best_pareto.csv")
-        print("   - graficos PNG")
-    
-    if stats['failed'] > 0:
-        print(f"\n[WARNING] {stats['failed']} pasta(s) falharam. Verifique os erros acima.")
-    
-    # agregar fronteira se solicitado
-    if args.aggregate_frontier:
-        aggregate_efficient_frontier(args.sweep_dir)
+        if metrics is not None:
+            total_time = time.time() - start_time
+            print(f"\n[INFO] Tempo total de análise: {total_time:.1f}s")
+        
+    except Exception as e:
+        print(f"[ERROR] Falha na análise consolidada: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -100,6 +100,19 @@ class Metaheuristic:
 
         # Evaluate fitness values
         self.pop.evaluate_fitness(self._problem_function)
+        
+        # Apply Write-Back (se a função objetivo guardou pesos reparados)
+        # Isso força a HH a "ver" a solução reparada em vez da original
+        if hasattr(self._problem_function, '_last_repaired_weights'):
+            repaired_dict = self._problem_function._last_repaired_weights
+            if 'current' in repaired_dict:
+                # Atualiza TODOS os agentes com o último resultado reparado
+                # (simplificado: assume que todos foram avaliados com a mesma "política")
+                repaired = repaired_dict.get('current', [])
+                if repaired:
+                    # Write-back para o melhor agente atual
+                    best_agent = np.argmin(self.pop.fitness)
+                    self.pop.apply_repaired_position_writeback(best_agent, repaired)
 
         # Update population
         if selector in __selectors__:

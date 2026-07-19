@@ -17,5 +17,5 @@
     "repeat_operators": true,  
     "verbose": true,  
     "solver": "static",  
-    "initial_scheme": "random"
+    "initial_scheme": "normal"
 }
